@@ -32,12 +32,26 @@ use Throwable;
  * Annahme des Auftrags, bei asynchroner Verarbeitung kommt gar kein Körper.
  * "aktiv" wird ausschließlich aus GET /estates/{id}/portals mit onlineSince
  * gesetzt. Bis dahin zeigt die Oberfläche "Bestätigung ausstehend".
+ *
+ * Nach Prüfbericht 2026-09-11:
+ * - Befund 1: Ein Portal zählt erst als angefordert, wenn POST /publish ohne
+ *   Ausnahme beantwortet und nicht als Fehler ausgewertet wurde. Ohne
+ *   erfolgreiche Anforderung bleibt listings.status unverändert. Sind alle
+ *   Publikationen gescheitert oder zurückgezogen, führt das Rücklesen das
+ *   Objekt nach bereit beziehungsweise zurueckgezogen zurück.
+ * - Befund 15: Ist die Bildübertragung nach dem synchronen Zeitlimit noch
+ *   offen, wird nicht veröffentlicht, sondern um erneutes Veröffentlichen
+ *   nach Abschluss der Hintergrundübertragung gebeten.
  */
 final class FlowfactPublishingService implements PublishingService
 {
     public const string HINWEIS_UNBEKANNT = 'Status nicht ermittelbar, in FLOWFACT prüfen';
 
     public const string HINWEIS_RUECKZUG = 'Rückzug angefordert, Bestätigung ausstehend';
+
+    public const string MELDUNG_BILDER_OFFEN = 'Die Bildübertragung ist noch nicht abgeschlossen, die restlichen Bilder werden im Hintergrund übertragen. Bitte veröffentlichen Sie das Objekt erneut, sobald der Übertragungsstatus "Übertragen" zeigt.';
+
+    public const string MELDUNG_KEIN_PORTAL_ANGEFORDERT = 'Für kein Portal konnte die Veröffentlichung angefordert werden. Der Objektstatus bleibt unverändert.';
 
     public function __construct(
         private readonly TokenProvider $tokenProvider,
@@ -131,12 +145,18 @@ final class FlowfactPublishingService implements PublishingService
                     'letzter_fehler' => null,
                 ],
             );
-            $angefordert++;
 
             try {
                 $antwort = $portalService->publish($this->publishRequest($portal, $entityId, $schema, 'ONLINE', $link->listing->adresse_im_inserat_anzeigen ?? true));
             } catch (AuthenticationException $exception) {
                 $this->setzeFehler($publication, AuthenticationException::MELDUNG);
+
+                // Bereits erfolgreich angeforderte Portale zählen weiterhin.
+                if ($angefordert > 0) {
+                    $this->nachVeroeffentlicht($listing, $warnungen);
+                }
+
+                $listing->unsetRelation('portalPublications');
 
                 return new PublishResult(false, AuthenticationException::MELDUNG, $warnungen, $exception);
             } catch (FlowfactException $exception) {
@@ -150,7 +170,14 @@ final class FlowfactPublishingService implements PublishingService
 
             if ($auswertung === 'fehler') {
                 $fehler[] = sprintf('%s: %s', $portal->name, (string) $publication->letzter_fehler);
-            } elseif ($auswertung === 'transferiert') {
+
+                continue;
+            }
+
+            // Befund 1: erst jetzt gilt das Portal als angefordert.
+            $angefordert++;
+
+            if ($auswertung === 'transferiert') {
                 $rueckleseNoetig = true;
             }
         }
@@ -165,8 +192,12 @@ final class FlowfactPublishingService implements PublishingService
 
         $listing->unsetRelation('portalPublications');
 
+        if ($fehler !== [] && $angefordert === 0) {
+            return new PublishResult(false, self::MELDUNG_KEIN_PORTAL_ANGEFORDERT.' '.implode(' ', $fehler), $warnungen);
+        }
+
         if ($fehler !== []) {
-            return new PublishResult($angefordert > count($fehler), 'Veröffentlichung teilweise fehlgeschlagen: '.implode(' ', $fehler), $warnungen);
+            return new PublishResult(true, 'Veröffentlichung teilweise fehlgeschlagen: '.implode(' ', $fehler), $warnungen);
         }
 
         return new PublishResult(true, sprintf('Veröffentlichung für %d Portal(e) angefordert. Der Portalstatus wird nach Bestätigung durch FLOWFACT aktualisiert.', $angefordert), $warnungen);
@@ -229,11 +260,15 @@ final class FlowfactPublishingService implements PublishingService
                 continue;
             }
 
+            $warFehler = $publication->status === PortalStatus::Fehler;
             $auswertung = $this->werteAntwortAus($publication, $antwort, (string) $link->flowfact_entity_id, $portalId);
 
             if ($auswertung === 'fehler') {
                 $fehler[] = sprintf('%s: %s', $publication->portal_name, (string) $publication->letzter_fehler);
-            } elseif ($auswertung === 'transferiert') {
+            } elseif ($auswertung === 'transferiert' || $warFehler) {
+                // Befund 1: eine reine Fehlerpublikation wird nach dem Rücklesen
+                // lokal auf nicht_veroeffentlicht zurückgesetzt, wenn FLOWFACT
+                // keinen Eintrag für sie kennt.
                 $rueckleseNoetig = true;
             }
         }
@@ -295,6 +330,11 @@ final class FlowfactPublishingService implements PublishingService
                 }
             } elseif ($publication->zurueckgezogen_at !== null && in_array($publication->status, [PortalStatus::Aktiv, PortalStatus::Angefordert, PortalStatus::Unbekannt], true)) {
                 $publication->status = PortalStatus::Zurueckgezogen;
+                $publication->letzter_fehler = null;
+            } elseif ($publication->zurueckgezogen_at !== null && $publication->status === PortalStatus::Fehler && $eintrag === null) {
+                // Befund 1: gescheiterte Anforderung, in FLOWFACT nicht vorhanden,
+                // nach Rückzug lokal wieder "nicht veröffentlicht".
+                $publication->status = PortalStatus::NichtVeroeffentlicht;
                 $publication->letzter_fehler = null;
             } elseif ($publication->status === PortalStatus::Angefordert && $this->istUeberfaellig($publication, $jetzt)) {
                 $publication->status = PortalStatus::Unbekannt;
@@ -387,6 +427,12 @@ final class FlowfactPublishingService implements PublishingService
 
         if ($link === null || $link->flowfact_entity_id === null) {
             return new PublishResult(false, 'Die FLOWFACT-Entität ist nach der Übertragung nicht bekannt.', $warnungen);
+        }
+
+        // Befund 15: Zeitlimit beim Bildupload erreicht, der Rest läuft als Job.
+        // Ein Inserat mit unvollständigem Bildsatz geht nicht online.
+        if ($link->sync_status !== SyncStatus::Uebertragen) {
+            return new PublishResult(false, self::MELDUNG_BILDER_OFFEN, $warnungen);
         }
 
         return null;
@@ -568,9 +614,13 @@ final class FlowfactPublishingService implements PublishingService
     }
 
     /**
-     * listings.status nur über die Statusmaschine: nach Rückzug aller Portale
-     * zurueckgezogen; ist ein Portal aktiv, während das Objekt bereit ist,
-     * veroeffentlicht.
+     * listings.status nur über die Statusmaschine (Befund 1): Solange eine
+     * Publikation angefordert oder aktiv ist, bleibt veroeffentlicht. Sind
+     * alle Publikationen fehler, unbekannt, zurueckgezogen oder
+     * nicht_veroeffentlicht, geht das Objekt nach zurueckgezogen, wenn
+     * mindestens ein Portal nach bestätigter Aktivität zurückgezogen wurde,
+     * sonst nach bereit. Ist ein Portal aktiv, während das Objekt bereit
+     * oder zurückgezogen ist, wird es veroeffentlicht.
      *
      * @param  Collection<int, ListingPortalPublication>  $publications
      */
@@ -578,13 +628,16 @@ final class FlowfactPublishingService implements PublishingService
     {
         $listing->refresh();
 
-        $offen = $publications->contains(fn (ListingPortalPublication $p): bool => in_array($p->status, [PortalStatus::Aktiv, PortalStatus::Angefordert, PortalStatus::Unbekannt], true));
-        $zurueckgezogen = $publications->contains(fn (ListingPortalPublication $p): bool => $p->status === PortalStatus::Zurueckgezogen);
+        $offen = $publications->contains(fn (ListingPortalPublication $p): bool => in_array($p->status, [PortalStatus::Aktiv, PortalStatus::Angefordert], true));
         $aktiv = $publications->contains(fn (ListingPortalPublication $p): bool => $p->status === PortalStatus::Aktiv);
+        $nachAktivZurueckgezogen = $publications->contains(fn (ListingPortalPublication $p): bool => $p->status === PortalStatus::Zurueckgezogen && $p->bestaetigt_at !== null);
 
         try {
-            if ($listing->status === ListingStatus::Veroeffentlicht && ! $offen && $zurueckgezogen) {
-                $this->statusMachine->transition($listing, ListingStatus::Zurueckgezogen);
+            if ($listing->status === ListingStatus::Veroeffentlicht && ! $offen) {
+                $this->statusMachine->transition($listing, $nachAktivZurueckgezogen ? ListingStatus::Zurueckgezogen : ListingStatus::Bereit);
+            } elseif ($listing->status === ListingStatus::Zurueckgezogen && $aktiv) {
+                $this->statusMachine->transition($listing, ListingStatus::Bereit);
+                $this->statusMachine->transition($listing, ListingStatus::Veroeffentlicht);
             } elseif ($listing->status === ListingStatus::Bereit && $aktiv) {
                 $this->statusMachine->transition($listing, ListingStatus::Veroeffentlicht);
             }

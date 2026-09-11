@@ -135,6 +135,83 @@ final class FlowfactPayloadMapperTest extends FlowfactTestCase
         self::assertNotContains('Keine FLOWFACT-Zuordnung für Nebenkosten', $payload->warnungen);
     }
 
+    /**
+     * Prüfbericht 2026-09-11, Befund 13.
+     */
+    public function test_heizkosten_gehen_bei_enthalten_in_nebenkosten_nicht_separat_an_flowfact(): void
+    {
+        $this->settings()->set(FieldMappingResolver::FELDZUORDNUNG, [
+            'nebenkosten_cent' => 'servicecharge',
+            'heizkosten_cent' => 'heatingcosts',
+            'warmmiete_cent' => 'totalrent',
+        ]);
+
+        $listing = Listing::factory()->miete()->create();
+        $listing->price()->create([
+            'kaltmiete_cent' => 80_000,
+            'nebenkosten_cent' => 30_000,           // enthält bereits 10.000 Heizkosten (Fall B)
+            'heizkosten_cent' => 10_000,
+            'heizkosten_in_nebenkosten_enthalten' => true,
+            'warmmiete_cent' => 110_000,
+        ]);
+
+        $payload = $this->mapper()->map($listing->fresh(['price', 'energy', 'media']));
+
+        self::assertSame(800.0, $payload->fields['rent']['values'][0]);
+        self::assertSame(300.0, $payload->fields['servicecharge']['values'][0]);
+        self::assertSame(1100.0, $payload->fields['totalrent']['values'][0]);
+        self::assertArrayNotHasKey('heatingcosts', $payload->fields, 'Heizkosten werden nicht zusätzlich separat gesendet.');
+        self::assertContains(FlowfactPayloadMapper::WARNUNG_HEIZKOSTEN_ENTHALTEN, $payload->warnungen);
+        self::assertContains('heatingcosts', $payload->leereFelder, 'Ein früher separat übertragener Wert wird beim PATCH gelöscht.');
+    }
+
+    /**
+     * Prüfbericht 2026-09-11, Befund 13: bei getrennter Angabe (Fall A) gehen die Heizkosten weiterhin separat.
+     */
+    public function test_heizkosten_gehen_bei_getrennter_angabe_separat_an_flowfact(): void
+    {
+        $this->settings()->set(FieldMappingResolver::FELDZUORDNUNG, ['heizkosten_cent' => 'heatingcosts']);
+
+        $listing = Listing::factory()->miete()->create();
+        $listing->price()->create([
+            'kaltmiete_cent' => 80_000,
+            'nebenkosten_cent' => 20_000,
+            'heizkosten_cent' => 10_000,
+            'heizkosten_in_nebenkosten_enthalten' => false,
+            'warmmiete_cent' => 110_000,
+        ]);
+
+        $payload = $this->mapper()->map($listing->fresh(['price', 'energy', 'media']));
+
+        self::assertSame(['values' => [100.0]], $payload->fields['heatingcosts']);
+        self::assertNotContains(FlowfactPayloadMapper::WARNUNG_HEIZKOSTEN_ENTHALTEN, $payload->warnungen);
+    }
+
+    /**
+     * Prüfbericht 2026-09-11, Befund 5.
+     */
+    public function test_leere_zugeordnete_felder_werden_als_loeschbefehle_bereitgestellt(): void
+    {
+        $listing = Listing::factory()->miete()->mitPreisen()->create([
+            'baujahr' => null,
+            'zustand' => null,
+            'stellplatz_typ' => null,
+        ])->fresh(['price', 'energy']);
+
+        $payload = $this->mapper()->map($listing);
+
+        self::assertArrayNotHasKey('yearofconstruction', $payload->fields);
+        self::assertContains('yearofconstruction', $payload->leereFelder);
+        self::assertContains('condition', $payload->leereFelder);
+        self::assertContains('parking', $payload->leereFelder);
+        self::assertNotContains('headline', $payload->leereFelder, 'Gesetzte Felder werden nicht gelöscht.');
+
+        $patch = $payload->fieldsMitLoeschungen();
+        self::assertSame(['values' => []], $patch['yearofconstruction']);
+        self::assertSame($payload->fields['headline'], $patch['headline']);
+        self::assertArrayNotHasKey('yearofconstruction', $payload->fields, 'Die Anlage bleibt frei von leeren Wertelisten.');
+    }
+
     public function test_interne_markerwerte_erscheinen_nirgends_im_payload(): void
     {
         $listing = Listing::factory()->miete()->mitPreisen()->mitEnergieausweis()->create();

@@ -5,10 +5,17 @@ declare(strict_types=1);
 namespace App\Domain\Listing;
 
 use App\Enums\ListingStatus;
+use App\Enums\PortalStatus;
 use App\Models\Listing;
 
 /**
  * Zustandsautomat des Bearbeitungsstatus (Datenvertrag Abschnitt 4.1, ADR-004).
+ *
+ * Ergänzung nach Prüfbericht 2026-09-11, Befund 1: veroeffentlicht -> bereit
+ * ist zulässig, solange keine Portalveröffentlichung mehr offen ist
+ * (angefordert oder aktiv). Damit findet ein Objekt, dessen Anforderungen
+ * sämtlich gescheitert oder zurückgezogen sind, wieder aus "veröffentlicht"
+ * heraus.
  */
 final class ListingStatusMachine
 {
@@ -20,7 +27,7 @@ final class ListingStatusMachine
     private const array UEBERGAENGE = [
         'entwurf' => ['bereit', 'archiviert'],
         'bereit' => ['entwurf', 'veroeffentlicht', 'archiviert'],
-        'veroeffentlicht' => ['zurueckgezogen'],
+        'veroeffentlicht' => ['zurueckgezogen', 'bereit'],
         'zurueckgezogen' => ['bereit', 'archiviert'],
         'archiviert' => [],
     ];
@@ -60,7 +67,20 @@ final class ListingStatusMachine
             }
         }
 
+        if ($from === ListingStatus::Veroeffentlicht && $to === ListingStatus::Bereit && $this->hatOffenePublikation($listing)) {
+            throw new IllegalStatusTransitionException(
+                'Der Statuswechsel von "Veröffentlicht" nach "Bereit" ist nicht zulässig, solange eine Portalveröffentlichung angefordert oder aktiv ist.'
+            );
+        }
+
         $listing->status = $to;
         $listing->save();
+    }
+
+    private function hatOffenePublikation(Listing $listing): bool
+    {
+        return $listing->portalPublications()
+            ->whereIn('status', [PortalStatus::Angefordert->value, PortalStatus::Aktiv->value])
+            ->exists();
     }
 }

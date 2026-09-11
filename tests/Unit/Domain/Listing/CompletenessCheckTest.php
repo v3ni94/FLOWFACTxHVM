@@ -9,6 +9,7 @@ use App\Enums\HeizkostenVersorgung;
 use App\Enums\Objektart;
 use App\Enums\ProvisionTyp;
 use App\Enums\Vermarktungsart;
+use App\Http\Controllers\App\Support\CompletenessFieldMap;
 use App\Models\Listing;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
@@ -79,6 +80,35 @@ final class CompletenessCheckTest extends TestCase
 
         $this->assertTrue($ergebnis->istVollstaendig());
         $this->assertNotEmpty($ergebnis->hinweise);
+    }
+
+    /**
+     * Prüfbericht 2026-09-11, Befund 2: Ein widersprüchlicher Preisdatensatz
+     * (z. B. durch einen Wechsel der Heizkostenversorgung außerhalb von
+     * Schritt 4 vor der Behebung) darf CompletenessCheck nie mit einer
+     * unbehandelten InvalidRentInputException zum Absturz bringen. Stattdessen
+     * wird das als fehlendes Feld gemeldet, damit die Oberfläche (Detailseite,
+     * alle Schritte, Veröffentlichung) bedienbar bleibt.
+     */
+    public function test_ein_widerspruechlicher_preisdatensatz_wirft_nicht_sondern_meldet_ein_fehlendes_feld(): void
+    {
+        $listing = Listing::factory()->vollstaendig()->create([
+            'vermarktungsart' => Vermarktungsart::Miete,
+            'heizkosten_versorgung' => HeizkostenVersorgung::Dezentral,
+        ]);
+
+        // Nur über direktes Schreiben erreichbar: der RentCalculator selbst
+        // verbietet Heizkosten bei dezentraler Versorgung.
+        $listing->price->update([
+            'heizkosten_cent' => 10_000,
+            'heizkosten_in_nebenkosten_enthalten' => false,
+        ]);
+
+        $ergebnis = app(CompletenessCheck::class)->check($listing->fresh(['price', 'energy', 'media']));
+
+        $this->assertFalse($ergebnis->istVollstaendig());
+        $this->assertSame('Preisangaben widersprüchlich', $ergebnis->fehlend['preis.widerspruch'] ?? null);
+        $this->assertSame(4, CompletenessFieldMap::schritt('preis.widerspruch'), 'Der Hinweis muss auf Schritt 4 verweisen, wo die Preise erneut gespeichert werden.');
     }
 
     public function test_provisionspflichtig_ohne_provisionstext_ist_unvollstaendig(): void

@@ -107,6 +107,13 @@ final class MediaUploadService
             }
 
             [$breite, $hoehe] = $abmessungen;
+
+            // Prüfbericht 2026-09-11, Befund 9: Pixelgrenze anhand der reinen
+            // Kopfdaten prüfen, bevor irgendetwas dekodiert wird (getimagesizefromstring
+            // liest nur den Header). Ohne diese Grenze allokieren
+            // ImagePreviewGenerator und ImageResizer beim Dekodieren mehrere
+            // GB RAM je Datei, unabhängig vom PHP-Speicherlimit.
+            $this->pruefePixelgrenze($breite, $hoehe);
         }
 
         $endung = self::ENDUNGEN[$mime] ?? 'bin';
@@ -144,6 +151,23 @@ final class MediaUploadService
             'im_inserat' => true,
             'pruefsumme_sha256' => $pruefsumme,
         ]);
+    }
+
+    /**
+     * @throws MediaUploadException
+     */
+    private function pruefePixelgrenze(int $breite, int $hoehe): void
+    {
+        $maxSeite = (int) config('media.max_side');
+        $maxPixel = (int) config('media.max_pixels');
+
+        if ($breite > $maxSeite || $hoehe > $maxSeite || $breite * $hoehe > $maxPixel) {
+            throw new MediaUploadException(sprintf(
+                'Das Bild ist zu groß (maximal %s Pixel Kantenlänge und %s Millionen Pixel).',
+                number_format($maxSeite, 0, ',', '.'),
+                number_format($maxPixel / 1_000_000, 0, ',', '.'),
+            ));
+        }
     }
 
     public function delete(ListingMedia $media): void

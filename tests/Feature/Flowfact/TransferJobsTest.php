@@ -4,17 +4,12 @@ declare(strict_types=1);
 
 namespace Tests\Feature\Flowfact;
 
-use App\Enums\ListingStatus;
-use App\Enums\PortalStatus;
 use App\Enums\SyncStatus;
 use App\Flowfact\Client\Exceptions\ServerException;
-use App\Flowfact\Sync\Jobs\PublishListingJob;
 use App\Flowfact\Sync\Jobs\TransferListingJob;
 use App\Flowfact\Sync\ListingSyncService;
-use App\Flowfact\Sync\PublishingService;
 use App\Models\Listing;
 use Illuminate\Contracts\Queue\Job;
-use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
 use Mockery;
@@ -28,12 +23,17 @@ final class TransferJobsTest extends FlowfactTestCase
         $this->hinterlegeToken();
         $this->setzeSchemata();
         Storage::fake('media');
+        $this->settings()->set('flowfact.album_'.self::SCHEMA_MIETE, ['album' => 'estate_album', 'bilder' => 'images']);
     }
 
+    /**
+     * Vollständiges Objekt mit bereits übertragenem Bild (ohne Bild im Inserat
+     * wäre es unvollständig und würde nicht übertragen, Befund 3).
+     */
     private function listing(): Listing
     {
         $listing = $this->bereitesListing();
-        $listing->media()->update(['im_inserat' => false]);
+        $listing->media()->update(['flowfact_multimedia_id' => '101', 'titel' => null]);
 
         return $listing->fresh(['price', 'energy', 'media']);
     }
@@ -49,8 +49,9 @@ final class TransferJobsTest extends FlowfactTestCase
 
         self::assertSame(3, $job->tries);
         self::assertSame([30, 120, 300], $job->backoff);
-        self::assertSame(3, (new PublishListingJob(1, []))->tries);
-        self::assertSame([30, 120, 300], (new PublishListingJob(1, []))->backoff);
+        // Befund 7: Zeitlimit im Job-Pfad unterhalb der Lease von 3 Minuten.
+        self::assertSame(150, TransferListingJob::ZEITLIMIT_SEKUNDEN);
+        self::assertLessThan(3 * 60, TransferListingJob::ZEITLIMIT_SEKUNDEN);
     }
 
     public function test_erfolgreiche_uebertragung_beendet_den_job(): void
@@ -59,6 +60,8 @@ final class TransferJobsTest extends FlowfactTestCase
         $this->fake()
             ->on('POST', '#^/search-service/schemas/[^/]+$#', self::searchResponse([]))
             ->on('POST', '#^/entity-service/schemas/[^/]+$#', self::entityResponse('ent-1'))
+            ->on('GET', '#^/multimedia-service/items/entities/[^/]+$#', [self::multimediaItem(101)])
+            ->on('PUT', '#^/multimedia-service/assigned/schemas/[^/]+/entities/[^/]+$#', ['assignments' => []])
             ->install();
 
         $job = new TransferListingJob($listing->id);
@@ -128,23 +131,5 @@ final class TransferJobsTest extends FlowfactTestCase
         $job->setJob($queueJob);
 
         $job->handle(app(ListingSyncService::class));
-    }
-
-    public function test_publish_job_fordert_die_veroeffentlichung_an_ohne_aktiv_zu_setzen(): void
-    {
-        $listing = $this->bereitesListing();
-        $listing->media()->update(['flowfact_multimedia_id' => '101']);
-        $this->fake()
-            ->on('POST', '#^/search-service/schemas/[^/]+$#', self::searchResponse([]))
-            ->on('POST', '#^/entity-service/schemas/[^/]+$#', self::entityResponse('ent-1'))
-            ->on('GET', '#^/portal-management-service/portals$#', self::portalsResponse())
-            ->on('POST', '#^/portal-management-service/publish$#', fn () => Http::response('', 200))
-            ->install();
-
-        (new PublishListingJob($listing->id, ['portal-is24']))->handle(app(PublishingService::class));
-
-        self::assertSame(PortalStatus::Angefordert, $listing->portalPublications()->first()->status);
-        self::assertSame(ListingStatus::Veroeffentlicht, $listing->fresh()->status);
-        Http::assertNotSent(fn (Request $r): bool => str_contains($r->url(), '/estates/'));
     }
 }

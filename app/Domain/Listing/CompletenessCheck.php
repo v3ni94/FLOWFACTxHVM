@@ -140,16 +140,27 @@ final class CompletenessCheck
                 && $preis->nebenkosten_cent !== null
                 && $listing->heizkosten_versorgung !== null
             ) {
-                $ergebnis = $this->rentCalculator->calculate(
-                    kaltmieteCent: $preis->kaltmiete_cent,
-                    nebenkostenCent: $preis->nebenkosten_cent,
-                    heizkostenCent: $preis->heizkosten_cent,
-                    heizkostenInNebenkostenEnthalten: $preis->heizkosten_in_nebenkosten_enthalten,
-                    versorgung: $listing->heizkosten_versorgung,
-                );
+                try {
+                    $ergebnis = $this->rentCalculator->calculate(
+                        kaltmieteCent: $preis->kaltmiete_cent,
+                        nebenkostenCent: $preis->nebenkosten_cent,
+                        heizkostenCent: $preis->heizkosten_cent,
+                        heizkostenInNebenkostenEnthalten: $preis->heizkosten_in_nebenkosten_enthalten,
+                        versorgung: $listing->heizkosten_versorgung,
+                    );
 
-                foreach ($ergebnis->hinweise as $hinweis) {
-                    $hinweise[] = $hinweis->label();
+                    foreach ($ergebnis->hinweise as $hinweis) {
+                        $hinweise[] = $hinweis->label();
+                    }
+                } catch (InvalidRentInputException) {
+                    // Prüfbericht 2026-09-11, Befund 2: Schritt 2 kann die
+                    // Heizkostenversorgung unabhängig von Schritt 4 ändern und
+                    // dabei widersprüchliche Preisangaben hinterlassen. Die
+                    // Vollständigkeitsprüfung darf dadurch nie eine Ausnahme
+                    // werfen (sonst 500 auf Detailseite, allen Schritten und
+                    // der Veröffentlichung), sondern meldet das als fehlendes
+                    // Feld; CompletenessFieldMap verweist dafür auf Schritt 4.
+                    $fehlend['preis.widerspruch'] = 'Preisangaben widersprüchlich';
                 }
             }
         }

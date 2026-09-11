@@ -7,6 +7,7 @@ namespace App\Http\Controllers\App;
 use App\Domain\Listing\ListingChangeTracker;
 use App\Enums\MediaTyp;
 use App\Http\Controllers\Controller;
+use App\Http\Requests\Listing\MediaSortRequest;
 use App\Http\Requests\Listing\MediaStoreRequest;
 use App\Http\Requests\Listing\MediaUpdateRequest;
 use App\Models\Listing;
@@ -15,7 +16,6 @@ use App\Services\Media\MediaUploadException;
 use App\Services\Media\MediaUploadService;
 use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
 use Illuminate\Http\RedirectResponse;
-use Illuminate\Http\Request;
 
 /**
  * Bild-, Grundriss- und Dokumentenverwaltung in Schritt 5 (Datenvertrag
@@ -64,13 +64,12 @@ class ListingMediaController extends Controller
         return back()->with('status', 'Die Datei wurde gelöscht.');
     }
 
-    public function sort(Request $request, Listing $listing): RedirectResponse
+    public function sort(MediaSortRequest $request, Listing $listing): RedirectResponse
     {
-        $this->authorize('update', $listing);
-
         // Assoziatives Feld [Medien-ID => Position], von flow.js (data-sortable)
-        // beim Verschieben aktualisiert.
-        $reihenfolge = (array) $request->input('reihenfolge', []);
+        // beim Verschieben aktualisiert. Die Werte sind über MediaSortRequest
+        // auf 0 bis 32767 begrenzt (Prüfbericht 2026-09-11, Befund 17).
+        $reihenfolge = (array) $request->validated('reihenfolge', []);
 
         foreach ($reihenfolge as $id => $position) {
             ListingMedia::query()

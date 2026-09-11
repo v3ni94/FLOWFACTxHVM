@@ -166,4 +166,23 @@ final class MediaHttpTest extends TestCase
         $this->assertSame(1, $erstes->fresh()->sortierung);
         $this->assertSame(0, $zweites->fresh()->sortierung);
     }
+
+    /**
+     * Prüfbericht 2026-09-11, Befund 17: `sortierung` ist ein smallInteger.
+     * Ohne Validierung führt ein Wert über 32767 auf MariaDB (Strict-Modus)
+     * zu einem SQL-Fehler und HTTP 500 statt zu einer Formularfehlermeldung.
+     */
+    public function test_eine_reihenfolge_ueber_32767_wird_mit_einem_validierungsfehler_abgelehnt(): void
+    {
+        $user = User::factory()->create();
+        $listing = Listing::factory()->create();
+        $medium = ListingMedia::factory()->for($listing)->create(['sortierung' => 0]);
+
+        $response = $this->actingAs($user)->post(route('app.listings.media.sort', $listing), [
+            'reihenfolge' => [$medium->id => 32768],
+        ]);
+
+        $response->assertSessionHasErrors('reihenfolge.'.$medium->id);
+        self::assertSame(0, $medium->fresh()->sortierung);
+    }
 }

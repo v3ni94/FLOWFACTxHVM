@@ -884,6 +884,7 @@ Nicht aus dem SDK belegbar. Vor Produktivsetzung mit einem Testkonto klären und
 
 27. Inhalt der nicht mitgelieferten `Changelog.md` (Deprecations, Portalumstellungen).
 28. Verfügbarkeit einer Staging-Umgebung (`api.staging.cloudios.flowfact-prod.cloud`) für Kunden.
+29. Löschsemantik leerer Wertelisten: Ob `PATCH /schemas/{schemaId}/entities/{entityId}` mit `{ feld: { "values": [] } }` den Feldwert löscht oder ignoriert (der Connector sendet diese Form für lokal geleerte Felder, abschaltbar über die Einstellung `flowfact.leere_felder_loeschen`); ebenso, ob `PATCH /items/{mediaItemId}` mit JSON-Patch `replace /title` beziehungsweise `remove /title` akzeptiert wird.
 
 ---
 

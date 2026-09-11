@@ -25,14 +25,28 @@ final class ListingChangeTracker
     public function __construct(
         private readonly CompletenessCheck $completenessCheck = new CompletenessCheck,
         private readonly ListingStatusMachine $statusMachine = new ListingStatusMachine,
+        private readonly ListingContentHasher $contentHasher = new ListingContentHasher,
     ) {}
 
-    public function recordChange(Listing $listing): void
+    /**
+     * @param  string|null  $vorherHash  Inhalts-Hash (ListingContentHasher) vor der Änderung.
+     *                                   Ohne Angabe wird wie bisher immer eine inhaltliche
+     *                                   Änderung angenommen. Mit Angabe wird der Hash nach dem
+     *                                   Speichern verglichen; sind beide gleich, hat sich kein
+     *                                   Inseratsfeld geändert (Prüfbericht 2026-09-11, Befund 12:
+     *                                   z. B. Schritt 7 mit rein internen Daten darf den
+     *                                   Übertragungsstatus nie kippen).
+     */
+    public function recordChange(Listing $listing, ?string $vorherHash = null): void
     {
         $listing->load(['price', 'energy', 'media', 'flowfactLink']);
 
-        $listing->markContentChanged();
-        $listing->save();
+        $inhaltGeaendert = $vorherHash === null || $vorherHash !== $this->contentHasher->hash($listing);
+
+        if ($inhaltGeaendert) {
+            $listing->markContentChanged();
+            $listing->save();
+        }
 
         if ($listing->status === ListingStatus::Bereit) {
             $ergebnis = $this->completenessCheck->check($listing);
@@ -40,6 +54,10 @@ final class ListingChangeTracker
             if (! $ergebnis->istVollstaendig()) {
                 $this->statusMachine->transition($listing, ListingStatus::Entwurf);
             }
+        }
+
+        if (! $inhaltGeaendert) {
+            return;
         }
 
         $link = $listing->flowfactLink;

@@ -21,6 +21,22 @@ final class ImagePreviewGenerator
      */
     public function generate(string $binaryContent): ?string
     {
+        // Prüfbericht 2026-09-11, Befund 9: zweite Verteidigungslinie gegen
+        // Dekompressionsbomben, falls generate() ohne die Prüfung aus
+        // MediaUploadService aufgerufen wird. getimagesizefromstring liest
+        // nur den Header, imagecreatefromstring dekodiert das ganze Bild.
+        $abmessungen = @getimagesizefromstring($binaryContent);
+
+        if ($abmessungen !== false) {
+            $maxSeite = (int) config('media.max_side');
+            $maxPixel = (int) config('media.max_pixels');
+            [$breite, $hoehe] = $abmessungen;
+
+            if ($breite > $maxSeite || $hoehe > $maxSeite || $breite * $hoehe > $maxPixel) {
+                return null;
+            }
+        }
+
         $quelle = @imagecreatefromstring($binaryContent);
 
         if ($quelle === false) {

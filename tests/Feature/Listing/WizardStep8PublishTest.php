@@ -6,6 +6,9 @@ namespace Tests\Feature\Listing;
 
 use App\Enums\ListingStatus;
 use App\Flowfact\Sync\NullPublishingService;
+use App\Flowfact\Sync\PublishingService;
+use App\Flowfact\Sync\PublishResult;
+use App\Flowfact\Sync\SyncResult;
 use App\Models\Listing;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -56,7 +59,9 @@ final class WizardStep8PublishTest extends TestCase
     public function test_die_veroeffentlichung_eines_unvollstaendigen_objekts_wird_serverseitig_blockiert(): void
     {
         $user = User::factory()->create();
-        $listing = Listing::factory()->create(['titel' => null]);
+        // Direkt auf "bereit" gesetzt, um die Vollständigkeitsprüfung isoliert
+        // von der Entwurfssperre (Befund 10) zu testen.
+        $listing = Listing::factory()->create(['titel' => null, 'status' => ListingStatus::Bereit]);
 
         $response = $this->actingAs($user)->post(route('app.listings.publish', $listing), [
             'portale' => ['immoscout24'],
@@ -66,7 +71,74 @@ final class WizardStep8PublishTest extends TestCase
         $response->assertSessionHas('error');
         $this->assertStringContainsString('Titel', session('error'));
 
+        $this->assertSame(ListingStatus::Bereit, $listing->fresh()->status);
+    }
+
+    /**
+     * Prüfbericht 2026-09-11, Befund 10: Ein Entwurf wurde durch einen
+     * einzigen POST auf /veroeffentlichen angelegt, übertragen und
+     * veröffentlicht, weil der Controller den Entwurf selbst auf "bereit"
+     * hob. Portiert aus Poc07EntwurfPublishTest.php mit umgekehrter
+     * Erwartung: der Aufruf wird abgelehnt, nichts wird übertragen oder
+     * veröffentlicht, der bewusste Zwischenschritt "Als bereit markieren"
+     * bleibt erforderlich.
+     */
+    public function test_ein_entwurf_kann_nicht_ueber_einen_einzigen_post_veroeffentlicht_werden(): void
+    {
+        $fake = new class implements PublishingService
+        {
+            public int $aufrufe = 0;
+
+            public function isConfigured(): bool
+            {
+                return true;
+            }
+
+            public function portals(): array
+            {
+                return [];
+            }
+
+            public function transfer(Listing $listing, ?User $user = null): SyncResult
+            {
+                $this->aufrufe++;
+
+                return SyncResult::failed('sollte nicht aufgerufen werden');
+            }
+
+            public function publish(Listing $listing, array $portalIds, ?User $user = null): PublishResult
+            {
+                $this->aufrufe++;
+
+                return new PublishResult(true, 'sollte nicht aufgerufen werden');
+            }
+
+            public function withdraw(Listing $listing, array $portalIds, ?User $user = null): PublishResult
+            {
+                $this->aufrufe++;
+
+                return new PublishResult(true, 'sollte nicht aufgerufen werden');
+            }
+
+            public function refreshStatus(Listing $listing): void
+            {
+                $this->aufrufe++;
+            }
+        };
+
+        $this->app->instance(PublishingService::class, $fake);
+
+        $user = User::factory()->create();
+        $listing = Listing::factory()->vollstaendig()->create(['status' => ListingStatus::Entwurf]);
+
+        $response = $this->actingAs($user)->post(route('app.listings.publish', $listing), [
+            'portale' => ['immoscout24'],
+        ]);
+
+        $response->assertRedirect();
+        $response->assertSessionHas('error', 'Bitte markieren Sie das Objekt zuerst als bereit.');
         $this->assertSame(ListingStatus::Entwurf, $listing->fresh()->status);
+        $this->assertSame(0, $fake->aufrufe, 'PublishingService darf für einen Entwurf nie aufgerufen werden.');
     }
 
     public function test_die_veroeffentlichung_ohne_portalauswahl_schlaegt_fehl(): void

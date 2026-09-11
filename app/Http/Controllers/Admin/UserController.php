@@ -14,6 +14,7 @@ use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Str;
 use Illuminate\View\View;
 
 class UserController extends Controller
@@ -104,7 +105,12 @@ class UserController extends Controller
 
         $this->authorize('deactivate', $user);
 
-        $user->update(['is_active' => false]);
+        $user->is_active = false;
+        // Prüfbericht 2026-09-11, Befund 11: Remember-Token zyklisieren, damit
+        // ein zuvor gesetztes "Angemeldet bleiben"-Cookie des deaktivierten
+        // Benutzers nicht mehr gültig ist.
+        $user->setRememberToken(Str::random(60));
+        $user->save();
 
         return back()->with('status', 'Der Benutzer "'.$user->name.'" wurde deaktiviert.');
     }

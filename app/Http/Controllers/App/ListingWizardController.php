@@ -7,6 +7,7 @@ namespace App\Http\Controllers\App;
 use App\Domain\Listing\CompletenessCheck;
 use App\Domain\Listing\InvalidRentInputException;
 use App\Domain\Listing\ListingChangeTracker;
+use App\Domain\Listing\ListingContentHasher;
 use App\Domain\Listing\RentCalculator;
 use App\Enums\Ausstattungsqualitaet;
 use App\Enums\Ausweistyp;
@@ -25,6 +26,7 @@ use App\Enums\Vermarktungsart;
 use App\Enums\Zustand;
 use App\Flowfact\Sync\PublishingService;
 use App\Http\Controllers\App\Support\ListingPreviewBuilder;
+use App\Http\Controllers\App\Support\PriceRecalculator;
 use App\Http\Controllers\App\Support\WizardSteps;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Listing\Step1GrunddatenRequest;
@@ -99,6 +101,12 @@ class ListingWizardController extends Controller
         $this->authorize('update', $listing);
         abort_unless(WizardSteps::istGueltig($schritt), 404);
 
+        // Prüfbericht 2026-09-11, Befund 12: Hash vor der Änderung merken, damit
+        // ListingChangeTracker den Übertragungsstatus nur kippt, wenn sich
+        // tatsächlich ein Inseratsfeld geändert hat (z. B. nie bei Schritt 7).
+        $listing->load(['price', 'energy', 'media']);
+        $vorherHash = app(ListingContentHasher::class)->hash($listing);
+
         match ($schritt) {
             1 => $this->speichereSchritt1($request, $listing),
             2 => $this->speichereSchritt2($request, $listing),
@@ -109,7 +117,7 @@ class ListingWizardController extends Controller
             default => null,
         };
 
-        app(ListingChangeTracker::class)->recordChange($listing);
+        app(ListingChangeTracker::class)->recordChange($listing, $vorherHash);
 
         $weiter = $request->string('aktion')->value() === 'weiter' && $schritt < WizardSteps::LETZTER_SCHRITT;
         $ziel = $weiter ? $schritt + 1 : $schritt;
@@ -139,6 +147,9 @@ class ListingWizardController extends Controller
     {
         app(Step2FlaechenRequest::class)->validated();
 
+        $vorherigeVersorgung = $listing->heizkosten_versorgung;
+        $versorgung = $this->enumOderNull(HeizkostenVersorgung::class, $request->input('heizkosten_versorgung'));
+
         $listing->update([
             'wohnflaeche_qm' => $this->leerAlsNull($request->input('wohnflaeche_qm')),
             'nutzflaeche_qm' => $this->leerAlsNull($request->input('nutzflaeche_qm')),
@@ -153,13 +164,22 @@ class ListingWizardController extends Controller
             'ausstattungsqualitaet' => $this->enumOderNull(Ausstattungsqualitaet::class, $request->input('ausstattungsqualitaet')),
             'heizungsart' => $this->enumOderNull(Heizungsart::class, $request->input('heizungsart')),
             'energietraeger' => $this->enumOderNull(Energietraeger::class, $request->input('energietraeger')),
-            'heizkosten_versorgung' => $this->enumOderNull(HeizkostenVersorgung::class, $request->input('heizkosten_versorgung')),
+            'heizkosten_versorgung' => $versorgung,
             'verfuegbar_ab_typ' => $this->enumOderNull(VerfuegbarAbTyp::class, $request->input('verfuegbar_ab_typ')),
             'verfuegbar_ab_datum' => $this->leerAlsNull($request->input('verfuegbar_ab_datum')),
             'ausstattung' => $this->ausstattungsWerte($request),
             'stellplatz_typ' => $this->enumOderNull(StellplatzTyp::class, $request->input('stellplatz_typ')),
             'stellplatz_anzahl' => $this->leerAlsNull($request->input('stellplatz_anzahl')),
         ]);
+
+        // Prüfbericht 2026-09-11, Befund 2: Schritt 2 ändert die
+        // Heizkostenversorgung unabhängig von Schritt 4. Beim Wechsel auf
+        // "dezentral" müssen etwaige in Schritt 4 erfasste Heizkosten
+        // entfernt und die Warmmiete neu berechnet werden, sonst bleibt eine
+        // widersprüchliche Warmmiete stehen.
+        if ($versorgung === HeizkostenVersorgung::Dezentral && $vorherigeVersorgung !== HeizkostenVersorgung::Dezentral) {
+            app(PriceRecalculator::class)->heizkostenVersorgungGeaendert($listing, $versorgung);
+        }
     }
 
     private function speichereSchritt3(Request $request, Listing $listing): void

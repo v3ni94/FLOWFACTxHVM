@@ -23,6 +23,9 @@ use Throwable;
  */
 class CheckConfigCommand extends Command
 {
+    /** Offene Jobs, die länger als so viele Minuten fällig sind, gelten als Stau. */
+    public const int JOBS_STAU_MINUTEN = 15;
+
     protected $signature = 'flow:check-config';
 
     protected $description = 'Prüft Umgebung, Datenbank, Speicher, Mail, Warteschlange und Scheduler-Lebenszeichen.';
@@ -40,7 +43,7 @@ class CheckConfigCommand extends Command
         $fehler = $this->pruefeDatenbank() || $fehler;
         $fehler = $this->pruefeMedien() || $fehler;
         $this->pruefeMail();
-        $this->pruefeWarteschlange();
+        $fehler = $this->pruefeWarteschlange() || $fehler;
         $fehler = $this->pruefeScheduler() || $fehler;
         $this->pruefeFlowfact();
 
@@ -147,7 +150,13 @@ class CheckConfigCommand extends Command
         $this->zeile('Mail-Treiber', (string) config('mail.default'), false);
     }
 
-    private function pruefeWarteschlange(): void
+    /**
+     * Warteschlange (Prüfbericht 2026-09-11, Befund 8): neben den Zählern
+     * wird das Alter des neuesten Jobs gemeldet. Offene Jobs, die seit mehr
+     * als 15 Minuten fällig sind, gelten als Fehler: der Worker
+     * (queue:work über den Scheduler) verarbeitet dann nicht.
+     */
+    private function pruefeWarteschlange(): bool
     {
         $treiber = (string) config('queue.default');
         $this->zeile('Warteschlangentreiber', $treiber, false);
@@ -158,7 +167,40 @@ class CheckConfigCommand extends Command
             $this->zeile('Jobs ausstehend / fehlgeschlagen', $ausstehend.' / '.$fehlgeschlagen, false);
         } catch (Throwable) {
             $this->zeile('Jobs ausstehend / fehlgeschlagen', 'nicht ermittelbar', false);
+
+            return false;
         }
+
+        if (! Schema::hasTable('jobs')) {
+            return false;
+        }
+
+        try {
+            $jetzt = now()->getTimestamp();
+            $neuester = DB::table('jobs')->max('created_at');
+            $grenze = $jetzt - self::JOBS_STAU_MINUTEN * 60;
+
+            $gestaut = DB::table('jobs')
+                ->whereNull('reserved_at')
+                ->where('available_at', '<=', $grenze)
+                ->count();
+
+            $neuesterText = $neuester === null
+                ? 'keine Jobs in der Tabelle'
+                : sprintf('neuester Job vor %d Minuten', intdiv(max(0, $jetzt - (int) $neuester), 60));
+
+            if ($gestaut > 0) {
+                $this->zeile('Warteschlange', sprintf('%s, %d offene(r) Job(s) seit mehr als %d Minuten fällig (Fehler: queue:work verarbeitet nicht)', $neuesterText, $gestaut, self::JOBS_STAU_MINUTEN), true);
+
+                return true;
+            }
+
+            $this->zeile('Warteschlange', $neuesterText.', keine gestauten Jobs', false);
+        } catch (Throwable $exception) {
+            $this->zeile('Warteschlange', 'nicht ermittelbar: '.$exception->getMessage(), false);
+        }
+
+        return false;
     }
 
     private function pruefeScheduler(): bool

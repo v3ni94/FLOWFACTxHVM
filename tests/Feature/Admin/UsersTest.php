@@ -9,6 +9,7 @@ use App\Enums\UserRole;
 use App\Models\User;
 use App\Policies\UserPolicy;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Str;
 use Tests\TestCase;
 
 class UsersTest extends TestCase
@@ -71,6 +72,26 @@ class UsersTest extends TestCase
 
         $response->assertRedirect();
         self::assertFalse($target->refresh()->is_active);
+    }
+
+    /**
+     * Prüfbericht 2026-09-11, Befund 11: Ohne Zyklus des Remember-Tokens
+     * blieb ein zuvor gesetztes "Angemeldet bleiben"-Cookie eines
+     * deaktivierten Benutzers technisch gültig.
+     */
+    public function test_die_deaktivierung_zyklisiert_den_remember_token(): void
+    {
+        $admin = User::factory()->admin()->create();
+        $target = User::factory()->create(['remember_token' => Str::random(60)]);
+        $alterToken = $target->remember_token;
+
+        $response = $this->actingAs($admin)->post('/admin/users/'.$target->id.'/deactivate');
+
+        $response->assertRedirect();
+        $target->refresh();
+        self::assertFalse($target->is_active);
+        self::assertNotSame($alterToken, $target->remember_token);
+        self::assertNotNull($target->remember_token);
     }
 
     public function test_ein_admin_kann_den_zweitfaktor_eines_benutzers_zuruecksetzen(): void

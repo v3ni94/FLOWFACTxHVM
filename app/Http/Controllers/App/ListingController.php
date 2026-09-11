@@ -159,6 +159,14 @@ class ListingController extends Controller
 
     public function publish(PublishRequest $request, Listing $listing, PublishingService $publishingService): RedirectResponse
     {
+        // Prüfbericht 2026-09-11, Befund 10: Ein Entwurf darf nie durch einen
+        // einzigen POST angelegt, übertragen und veröffentlicht werden. Der
+        // bewusste Zwischenschritt "Als bereit markieren" bleibt Pflicht;
+        // hier wird nichts übertragen oder veröffentlicht.
+        if ($listing->status === ListingStatus::Entwurf) {
+            return back()->with('error', 'Bitte markieren Sie das Objekt zuerst als bereit.');
+        }
+
         $vollstaendigkeit = app(CompletenessCheck::class)->check($listing);
 
         if (! $vollstaendigkeit->istVollstaendig()) {
@@ -180,14 +188,6 @@ class ListingController extends Controller
             }
         }
 
-        if ($listing->status === ListingStatus::Entwurf) {
-            try {
-                app(ListingStatusMachine::class)->transition($listing, ListingStatus::Bereit);
-            } catch (IllegalStatusTransitionException $exception) {
-                return back()->with('error', $exception->getMessage());
-            }
-        }
-
         /** @var list<string> $portale */
         $portale = $request->validated('portale');
 
@@ -206,8 +206,17 @@ class ListingController extends Controller
     {
         $this->authorize('withdraw', $listing);
 
+        // Prüfbericht 2026-09-11, Befund 1: Publikationen im Status "fehler"
+        // oder "unbekannt" müssen ebenfalls zurückgezogen werden können,
+        // sonst bleibt ein Objekt nach einem gescheiterten Portalaufruf ohne
+        // Ausweg über die Oberfläche stehen.
         $portalIds = $listing->portalPublications()
-            ->whereIn('status', [PortalStatus::Angefordert->value, PortalStatus::Aktiv->value])
+            ->whereIn('status', [
+                PortalStatus::Angefordert->value,
+                PortalStatus::Aktiv->value,
+                PortalStatus::Fehler->value,
+                PortalStatus::Unbekannt->value,
+            ])
             ->pluck('portal_id')
             ->all();
 

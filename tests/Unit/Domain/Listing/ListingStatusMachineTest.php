@@ -7,7 +7,9 @@ namespace Tests\Unit\Domain\Listing;
 use App\Domain\Listing\IllegalStatusTransitionException;
 use App\Domain\Listing\ListingStatusMachine;
 use App\Enums\ListingStatus;
+use App\Enums\PortalStatus;
 use App\Models\Listing;
+use App\Models\ListingPortalPublication;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\TestCase;
@@ -36,7 +38,8 @@ final class ListingStatusMachineTest extends TestCase
             'veroeffentlicht nach zurueckgezogen erlaubt' => [ListingStatus::Veroeffentlicht, ListingStatus::Zurueckgezogen, true],
             'veroeffentlicht nach archiviert verboten' => [ListingStatus::Veroeffentlicht, ListingStatus::Archiviert, false],
             'veroeffentlicht nach entwurf verboten' => [ListingStatus::Veroeffentlicht, ListingStatus::Entwurf, false],
-            'veroeffentlicht nach bereit verboten' => [ListingStatus::Veroeffentlicht, ListingStatus::Bereit, false],
+            // Prüfbericht 2026-09-11, Befund 1: zulässig, sofern keine Publikation angefordert oder aktiv ist
+            'veroeffentlicht nach bereit erlaubt' => [ListingStatus::Veroeffentlicht, ListingStatus::Bereit, true],
             'zurueckgezogen nach bereit erlaubt' => [ListingStatus::Zurueckgezogen, ListingStatus::Bereit, true],
             'zurueckgezogen nach archiviert erlaubt' => [ListingStatus::Zurueckgezogen, ListingStatus::Archiviert, true],
             'zurueckgezogen nach veroeffentlicht verboten' => [ListingStatus::Zurueckgezogen, ListingStatus::Veroeffentlicht, false],
@@ -80,15 +83,53 @@ final class ListingStatusMachineTest extends TestCase
 
     public function test_ein_verbotener_uebergang_wirft_und_speichert_nicht(): void
     {
+        // Prüfbericht 2026-09-11, Befund 1: veroeffentlicht -> bereit ist jetzt
+        // zulässig, veroeffentlicht -> archiviert bleibt verboten.
         $listing = Listing::factory()->create(['status' => ListingStatus::Veroeffentlicht]);
 
         try {
-            app(ListingStatusMachine::class)->transition($listing, ListingStatus::Bereit);
+            app(ListingStatusMachine::class)->transition($listing, ListingStatus::Archiviert);
             $this->fail('Es wurde keine Ausnahme geworfen.');
         } catch (IllegalStatusTransitionException) {
             // erwartet
         }
 
         $this->assertSame(ListingStatus::Veroeffentlicht, $listing->fresh()->status);
+    }
+
+    /**
+     * Prüfbericht 2026-09-11, Befund 1.
+     */
+    public function test_veroeffentlicht_nach_bereit_ist_bei_offener_publikation_blockiert(): void
+    {
+        foreach ([PortalStatus::Angefordert, PortalStatus::Aktiv] as $offen) {
+            $listing = Listing::factory()->create(['status' => ListingStatus::Veroeffentlicht]);
+            ListingPortalPublication::factory()->create(['listing_id' => $listing->id, 'status' => $offen]);
+
+            try {
+                app(ListingStatusMachine::class)->transition($listing, ListingStatus::Bereit);
+                $this->fail('Es wurde keine Ausnahme geworfen für Portalstatus '.$offen->value);
+            } catch (IllegalStatusTransitionException $exception) {
+                $this->assertStringContainsString('angefordert oder aktiv', $exception->getMessage());
+            }
+
+            $this->assertSame(ListingStatus::Veroeffentlicht, $listing->fresh()->status);
+        }
+    }
+
+    /**
+     * Prüfbericht 2026-09-11, Befund 1.
+     */
+    public function test_veroeffentlicht_nach_bereit_gelingt_wenn_nur_gescheiterte_oder_zurueckgezogene_publikationen_vorliegen(): void
+    {
+        $listing = Listing::factory()->create(['status' => ListingStatus::Veroeffentlicht]);
+
+        foreach ([PortalStatus::Fehler, PortalStatus::Unbekannt, PortalStatus::Zurueckgezogen, PortalStatus::NichtVeroeffentlicht] as $i => $status) {
+            ListingPortalPublication::factory()->create(['listing_id' => $listing->id, 'portal_id' => 'portal-'.$i, 'status' => $status]);
+        }
+
+        app(ListingStatusMachine::class)->transition($listing, ListingStatus::Bereit);
+
+        $this->assertSame(ListingStatus::Bereit, $listing->fresh()->status);
     }
 }

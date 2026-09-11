@@ -27,10 +27,12 @@ Schedule::call(function (): void {
     Cache::put('scheduler.last_run', now(), now()->addDay());
 })->everyMinute()->name('scheduler.heartbeat')->onOneServer();
 
+// Vordergrund (Standard): runInBackground() kennt keinen Parameter und würde
+// den Worker als Shell-Hintergrundprozess starten (Prüfbericht 2026-09-11,
+// Befund 8); auf IONOS Webhosting läuft er dann nicht zuverlässig.
 Schedule::command('queue:work database --stop-when-empty --max-time=45 --tries=3 --backoff=30')
     ->everyMinute()
-    ->withoutOverlapping()
-    ->runInBackground(false);
+    ->withoutOverlapping();
 
 Schedule::command('flow:check-config --quiet')
     ->dailyAt('06:00');

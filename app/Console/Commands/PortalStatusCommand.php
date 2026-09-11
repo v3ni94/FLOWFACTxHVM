@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Console\Commands;
 
+use App\Enums\ListingStatus;
 use App\Enums\PortalStatus;
 use App\Flowfact\Sync\FlowfactPublishingService;
 use App\Flowfact\Sync\Jobs\RefreshPortalStatusJob;
@@ -23,6 +24,11 @@ use Throwable;
  * "angefordert" bei jedem Lauf, Objekte mit "aktiv" nur, wenn die letzte
  * Prüfung älter als 60 Minuten ist. Angeforderte Veröffentlichungen ohne
  * Rücklesen nach 30 Minuten werden "unbekannt".
+ *
+ * Zusätzlich (Prüfbericht 2026-09-11, Befund 1) werden veröffentlichte
+ * Objekte geprüft, deren Publikationen sämtlich gescheitert, unbekannt oder
+ * zurückgezogen sind; das Rücklesen führt sie über die Statusmaschine nach
+ * bereit beziehungsweise zurueckgezogen zurück.
  */
 class PortalStatusCommand extends Command
 {
@@ -47,6 +53,16 @@ class PortalStatusCommand extends Command
             })
             ->distinct()
             ->pluck('listing_id');
+
+        $ohneOffenePublikation = Listing::query()
+            ->where('status', ListingStatus::Veroeffentlicht->value)
+            ->whereHas('portalPublications')
+            ->whereDoesntHave('portalPublications', function ($query): void {
+                $query->whereIn('status', [PortalStatus::Angefordert->value, PortalStatus::Aktiv->value]);
+            })
+            ->pluck('id');
+
+        $listingIds = $listingIds->merge($ohneOffenePublikation)->unique()->values();
 
         if ($listingIds->isEmpty()) {
             $this->line('Keine Objekte zu prüfen.');

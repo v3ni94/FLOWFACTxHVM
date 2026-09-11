@@ -99,7 +99,7 @@ final class RefreshPortalStatusJobTest extends FlowfactTestCase
         $aktivFrisch = $this->listingMitPublikation(PortalStatus::Aktiv, Carbon::now()->subHours(3), Carbon::now()->subMinutes(20));
         $aktivAlt = $this->listingMitPublikation(PortalStatus::Aktiv, Carbon::now()->subHours(3), Carbon::now()->subMinutes(61));
         $aktivNie = $this->listingMitPublikation(PortalStatus::Aktiv, Carbon::now()->subHours(3), null);
-        $this->listingMitPublikation(PortalStatus::Zurueckgezogen, Carbon::now()->subHours(3));
+        $zurueckgezogen = $this->listingMitPublikation(PortalStatus::Zurueckgezogen, Carbon::now()->subHours(3));
 
         $gepruefteEntities = [];
         Http::fake(function ($request) use (&$gepruefteEntities) {
@@ -110,7 +110,13 @@ final class RefreshPortalStatusJobTest extends FlowfactTestCase
 
         $this->artisan('flow:portal-status')->assertExitCode(0);
 
-        self::assertCount(3, $gepruefteEntities);
+        // Prüfbericht 2026-09-11, Befund 1: ein veröffentlichtes Objekt ohne offene
+        // Publikation (nur zurueckgezogen) wird ebenfalls geprüft, damit das
+        // Rücklesen den Objektstatus zurückführt. Hier meldet FLOWFACT es online,
+        // die Publikation wird wieder aktiv und das Objekt bleibt veröffentlicht.
+        self::assertCount(4, $gepruefteEntities);
+        self::assertSame(PortalStatus::Aktiv, $zurueckgezogen->portalPublications()->first()->status);
+        self::assertSame(ListingStatus::Veroeffentlicht, $zurueckgezogen->fresh()->status);
         self::assertTrue($aktivFrisch->portalPublications()->first()->letzte_pruefung_at->equalTo(Carbon::now()->subMinutes(20)));
         self::assertTrue($aktivAlt->portalPublications()->first()->letzte_pruefung_at->equalTo(Carbon::now()));
         self::assertTrue($aktivNie->portalPublications()->first()->letzte_pruefung_at->equalTo(Carbon::now()));

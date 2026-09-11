@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Flowfact\Sync;
 
+use App\Domain\Listing\CompletenessCheck;
 use App\Domain\Listing\ListingContentHasher;
 use App\Domain\Settings\SettingsRepository;
 use App\Enums\ListingStatus;
@@ -31,6 +32,16 @@ use Throwable;
  * über die Objektnummer (identifier). Ein zweites Anlegen ist damit
  * ausgeschlossen, solange die Suche funktioniert; liefert die Suche einen
  * Fehler statt eines leeren Ergebnisses, wird nicht angelegt.
+ *
+ * Nach Prüfbericht 2026-09-11:
+ * - Befund 3: Ist eine Entität bekannt, gilt das im Link gespeicherte Schema.
+ *   Ein Wechsel der Vermarktungsart nach der Übertragung wird abgelehnt statt
+ *   eine zweite Entität im anderen Schema anzulegen. Jede Übertragung setzt
+ *   die bestandene Vollständigkeitsprüfung voraus.
+ * - Befund 5: Beim PATCH werden geleerte, zugeordnete Felder als
+ *   { "values": [] } gesendet (Einstellung flowfact.leere_felder_loeschen).
+ * - Befund 7: Lease mit Token, Freigabe nur der eigenen Lease, Herzschlag
+ *   nach jedem Bildupload.
  */
 final class ListingSyncService
 {
@@ -44,6 +55,17 @@ final class ListingSyncService
 
     public const string MELDUNG_SCHEMA_FEHLT = 'Kein FLOWFACT-Schema für %s hinterlegt. Bitte im Adminbereich unter FLOWFACT das Schema auswählen.';
 
+    public const string MELDUNG_SCHEMAWECHSEL = 'Die Vermarktungsart wurde nach der Übertragung geändert. Bitte das Objekt in FLOWFACT manuell prüfen oder ein neues Objekt anlegen.';
+
+    public const string MELDUNG_UNVOLLSTAENDIG = 'Das Objekt ist nicht vollständig und wird nicht übertragen. Es fehlen: %s.';
+
+    /**
+     * Einstellung (Standard true): geleerte Felder beim PATCH mit leerer
+     * Werteliste senden, damit FLOWFACT den alten Wert löscht. Die genaue
+     * Serversemantik ist am Konto zu verifizieren (flowfact-api.md Abschnitt 9).
+     */
+    public const string LEERE_FELDER_LOESCHEN = 'flowfact.leere_felder_loeschen';
+
     public function __construct(
         private readonly EntityService $entities,
         private readonly SearchService $search,
@@ -53,6 +75,7 @@ final class ListingSyncService
         private readonly SettingsRepository $settings,
         private readonly SyncLease $lease,
         private readonly TokenScrubber $scrubber,
+        private readonly CompletenessCheck $completeness = new CompletenessCheck,
     ) {}
 
     /**
@@ -67,8 +90,18 @@ final class ListingSyncService
         $listing->loadMissing(['price', 'energy', 'media']);
         $link = $this->linkFuer($listing);
 
+        // Vollständigkeit in jedem Status (Befund 3): ein unvollständiges
+        // Objekt geht nie an FLOWFACT, auch nicht als Aktualisierung.
+        $vollstaendigkeit = $this->completeness->check($listing);
+
+        if (! $vollstaendigkeit->istVollstaendig()) {
+            return $this->fehlgeschlagen($link, sprintf(self::MELDUNG_UNVOLLSTAENDIG, implode(', ', $vollstaendigkeit->fehlend)));
+        }
+
         // Schritt 1: Lease
-        if (! $this->lease->acquire($link)) {
+        $token = $this->lease->acquire($link);
+
+        if ($token === null) {
             return SyncResult::busy();
         }
 
@@ -79,11 +112,18 @@ final class ListingSyncService
             $link->sync_status = SyncStatus::UebertragungLaeuft;
             $link->save();
 
-            // Schritt 3: Schema aus den Einstellungen, nie geraten
-            $schema = $this->schemaFuer($listing);
+            // Schritt 3: Schema aus den Einstellungen, nie geraten. Bei
+            // bekannter Entität gilt das gespeicherte Schema des Links.
+            $abgeleitet = $this->schemaFuer($listing);
 
-            if ($schema === null) {
+            if ($abgeleitet === null) {
                 return $this->fehlgeschlagen($link, sprintf(self::MELDUNG_SCHEMA_FEHLT, $listing->istMiete() ? 'Miete' : 'Kauf'));
+            }
+
+            $schema = $this->gespeichertesSchema($link) ?? $abgeleitet;
+
+            if ($schema !== $abgeleitet) {
+                return $this->fehlgeschlagen($link, self::MELDUNG_SCHEMAWECHSEL);
             }
 
             $entities = $this->entities->scoped($listing, $user);
@@ -117,14 +157,18 @@ final class ListingSyncService
             $inhaltGeaendert = $angelegt || $force || $link->uebertragener_inhalt_hash !== $hash;
 
             if (! $angelegt && $inhaltGeaendert) {
-                $entities->patch($schema, $entityId, $payload->fields);
+                $entities->patch($schema, $entityId, $this->leereFelderLoeschen() ? $payload->fieldsMitLoeschungen() : $payload->fields);
             }
 
             // Schritt 7: Medien
             $medienVollstaendig = true;
 
             if ($inhaltGeaendert || $this->media->hatOffeneArbeit($listing)) {
-                $medien = $this->media->sync($listing, $schema, $entityId, $user, $deadline);
+                $heartbeat = function () use ($link, $token): void {
+                    $this->lease->extend($link, $token);
+                };
+
+                $medien = $this->media->sync($listing, $schema, $entityId, $user, $deadline, $inhaltGeaendert, $heartbeat);
                 $warnungen = array_merge($warnungen, $medien->warnungen);
                 $medienVollstaendig = $medien->vollstaendig;
             }
@@ -163,7 +207,7 @@ final class ListingSyncService
         } catch (Throwable $exception) {
             return $this->fehlgeschlagen($link, 'Unerwarteter Fehler bei der Übertragung: '.$exception->getMessage(), $exception);
         } finally {
-            $this->lease->release($link);
+            $this->lease->release($link, $token);
         }
     }
 
@@ -172,6 +216,27 @@ final class ListingSyncService
         $schema = $this->settings->get($listing->istMiete() ? self::SCHEMA_MIETE : self::SCHEMA_KAUF);
 
         return is_string($schema) && trim($schema) !== '' ? trim($schema) : null;
+    }
+
+    /**
+     * Schema des Links, sobald eine Entität bekannt ist (Befund 3).
+     */
+    private function gespeichertesSchema(ListingFlowfactLink $link): ?string
+    {
+        if ($link->flowfact_entity_id === null) {
+            return null;
+        }
+
+        $schema = $link->flowfact_schema;
+
+        return is_string($schema) && trim($schema) !== '' ? trim($schema) : null;
+    }
+
+    private function leereFelderLoeschen(): bool
+    {
+        $wert = $this->settings->get(self::LEERE_FELDER_LOESCHEN, true);
+
+        return filter_var($wert, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE) ?? true;
     }
 
     /**

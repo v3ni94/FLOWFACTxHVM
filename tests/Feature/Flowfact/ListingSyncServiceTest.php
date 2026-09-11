@@ -28,6 +28,10 @@ final class ListingSyncServiceTest extends FlowfactTestCase
 
     private const string SEARCH = '#^/search-service/schemas/[^/]+$#';
 
+    private const string ITEMS = '#^/multimedia-service/items/entities/[^/]+$#';
+
+    private const string ASSIGN = '#^/multimedia-service/assigned/schemas/[^/]+/entities/[^/]+$#';
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -35,6 +39,8 @@ final class ListingSyncServiceTest extends FlowfactTestCase
         $this->hinterlegeToken();
         $this->setzeSchemata();
         Storage::fake('media');
+        // Album je Schema vorbelegt, damit der Medienabgleich ohne Albumaufruf auskommt.
+        $this->settings()->set('flowfact.album_'.self::SCHEMA_MIETE, ['album' => 'estate_album', 'bilder' => 'images']);
     }
 
     private function service(): ListingSyncService
@@ -43,20 +49,33 @@ final class ListingSyncServiceTest extends FlowfactTestCase
     }
 
     /**
-     * Objekt ohne Medien im Inserat, damit die Tests des Entitätsablaufs
-     * ohne Bildupload auskommen.
+     * Vollständiges Objekt, dessen Bild bereits ein FLOWFACT-Item trägt, damit
+     * die Tests des Entitätsablaufs ohne Bildupload auskommen. Ein Objekt ohne
+     * Bild im Inserat wäre unvollständig und würde seit Prüfbericht
+     * 2026-09-11, Befund 3, gar nicht übertragen.
      */
     private function listingOhneBilder(): Listing
     {
         $listing = $this->bereitesListing();
-        $listing->media()->update(['im_inserat' => false]);
+        $listing->media()->update(['flowfact_multimedia_id' => '101', 'flowfact_titel' => null, 'titel' => null]);
 
         return $listing->fresh(['price', 'energy', 'media']);
     }
 
+    /**
+     * Medienaufrufe, die bei jeder Inhaltsänderung anfallen (Befund 4: die
+     * Reihenfolge wird bei geändertem Hash neu gesetzt).
+     */
+    private function mitMedienRouten(FakeFlowfact $fake): FakeFlowfact
+    {
+        return $fake
+            ->on('GET', self::ITEMS, fn () => Http::response([self::multimediaItem(101)]))
+            ->on('PUT', self::ASSIGN, ['assignments' => []]);
+    }
+
     private function fakeOhneTreffer(string $neueId = 'ent-neu', mixed $createAntwort = null): FakeFlowfact
     {
-        return $this->fake()
+        return $this->mitMedienRouten($this->fake())
             ->on('POST', self::SEARCH, self::searchResponse([]))
             ->on('POST', self::CREATE, $createAntwort ?? self::entityResponse($neueId))
             ->install();
@@ -115,7 +134,7 @@ final class ListingSyncServiceTest extends FlowfactTestCase
             'uebertragener_inhalt_hash' => 'alter-hash',
         ]);
 
-        $fake = $this->fake()
+        $fake = $this->mitMedienRouten($this->fake())
             ->on('GET', self::GET_ENTITY, self::entityResponse('ent-1'))
             ->on('PATCH', self::GET_ENTITY, self::entityResponse('ent-1'))
             ->install();
@@ -135,7 +154,7 @@ final class ListingSyncServiceTest extends FlowfactTestCase
     {
         $listing = $this->listingOhneBilder();
 
-        $this->fake()
+        $this->mitMedienRouten($this->fake())
             ->on('POST', self::SEARCH, self::searchResponse([]))
             ->on('POST', self::CREATE, self::entityResponse('ent-1'))
             ->on('GET', self::GET_ENTITY, self::entityResponse('ent-1'))
@@ -153,7 +172,7 @@ final class ListingSyncServiceTest extends FlowfactTestCase
     public function test_force_erzwingt_den_patch(): void
     {
         $listing = $this->listingOhneBilder();
-        $fake = $this->fake()
+        $fake = $this->mitMedienRouten($this->fake())
             ->on('POST', self::SEARCH, self::searchResponse([]))
             ->on('POST', self::CREATE, self::entityResponse('ent-1'))
             ->on('GET', self::GET_ENTITY, self::entityResponse('ent-1'))
@@ -169,7 +188,7 @@ final class ListingSyncServiceTest extends FlowfactTestCase
     public function test_suche_findet_vorhandene_entitaet_und_legt_nicht_an(): void
     {
         $listing = $this->listingOhneBilder();
-        $fake = $this->fake()
+        $fake = $this->mitMedienRouten($this->fake())
             ->on('POST', self::SEARCH, self::searchResponse([
                 self::entityResponse('ent-vorhanden', ['identifier' => ['values' => [$listing->objektnummer]]]),
             ]))
@@ -188,7 +207,7 @@ final class ListingSyncServiceTest extends FlowfactTestCase
     public function test_treffer_mit_abweichendem_identifier_zaehlt_nicht(): void
     {
         $listing = $this->listingOhneBilder();
-        $fake = $this->fake()
+        $fake = $this->mitMedienRouten($this->fake())
             ->on('POST', self::SEARCH, self::searchResponse([
                 self::entityResponse('ent-fremd', ['identifier' => ['values' => [$listing->objektnummer.'-ALT']]]),
             ]))
@@ -229,6 +248,14 @@ final class ListingSyncServiceTest extends FlowfactTestCase
                 return Http::response(self::entityResponse('ent-nach-timeout'));
             }
 
+            if ($request->method() === 'GET' && preg_match(self::ITEMS, $path) === 1) {
+                return Http::response([self::multimediaItem(101)]);
+            }
+
+            if ($request->method() === 'PUT' && preg_match(self::ASSIGN, $path) === 1) {
+                return Http::response(['assignments' => []]);
+            }
+
             return null;
         });
 
@@ -247,7 +274,8 @@ final class ListingSyncServiceTest extends FlowfactTestCase
         self::assertTrue($zweiter->ok, $zweiter->meldung);
         self::assertSame('ent-nach-timeout', $zweiter->entityId);
         self::assertSame(1, $createVersuche, 'Über beide Läufe wird genau ein POST zum Anlegen gesendet.');
-        Http::assertSentCount(3);
+        // Anlegen, Suche, PATCH sowie Items lesen und Reihenfolge setzen (Befund 4).
+        Http::assertSentCount(5);
     }
 
     public function test_suchfehler_verhindert_das_anlegen(): void
@@ -297,7 +325,7 @@ final class ListingSyncServiceTest extends FlowfactTestCase
             'flowfact_schema' => self::SCHEMA_MIETE,
         ]);
 
-        $fake = $this->fake()
+        $fake = $this->mitMedienRouten($this->fake())
             ->on('GET', self::GET_ENTITY, ['message' => 'not found'], 404)
             ->on('POST', self::SEARCH, self::searchResponse([]))
             ->on('POST', self::CREATE, self::entityResponse('ent-neu'))
@@ -314,7 +342,7 @@ final class ListingSyncServiceTest extends FlowfactTestCase
     {
         $listing = $this->listingOhneBilder();
         $link = ListingFlowfactLink::factory()->create(['listing_id' => $listing->id]);
-        self::assertTrue(app(SyncLease::class)->acquire($link));
+        self::assertNotNull(app(SyncLease::class)->acquire($link));
 
         Http::fake();
 
@@ -411,6 +439,7 @@ final class ListingSyncServiceTest extends FlowfactTestCase
         $ergebnis = $this->service()->sync($listing);
 
         self::assertContains('Keine FLOWFACT-Zuordnung für Nebenkosten', $ergebnis->warnungen);
-        self::assertSame(2, TransferLog::query()->where('listing_id', $listing->id)->count());
+        // Suche, Anlegen, Items lesen, Reihenfolge setzen (Befund 4).
+        self::assertSame(4, TransferLog::query()->where('listing_id', $listing->id)->count());
     }
 }

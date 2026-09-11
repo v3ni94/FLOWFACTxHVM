@@ -23,10 +23,16 @@ use RuntimeException;
  * Auth-Fehler: sofort endgültig fehlgeschlagen, eine Wiederholung ändert
  * nichts. Der Ablauf im Service ist idempotent, ein erneuter Versuch legt
  * keine zweite Entität an.
+ *
+ * Zeitlimit (Prüfbericht 2026-09-11, Befund 7): 150 Sekunden, unterhalb der
+ * Lease von 3 Minuten. Bleiben Bilder offen, reiht der Service den Rest
+ * selbst als neuen Job ein, wie im synchronen Weg.
  */
 final class TransferListingJob implements ShouldQueue
 {
     use Queueable;
+
+    public const int ZEITLIMIT_SEKUNDEN = 150;
 
     public int $tries = 3;
 
@@ -48,7 +54,7 @@ final class TransferListingJob implements ShouldQueue
         }
 
         $user = $this->userId !== null ? User::query()->find($this->userId) : null;
-        $ergebnis = $sync->sync($listing, $user, $this->force);
+        $ergebnis = $sync->sync($listing, $user, $this->force, self::ZEITLIMIT_SEKUNDEN);
 
         if ($ergebnis->ok) {
             return;

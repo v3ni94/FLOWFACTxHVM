@@ -93,7 +93,9 @@ final class MediaSyncServiceTest extends FlowfactTestCase
 
         $presigned = $fake->requests('GET', self::PRESIGNED)[0];
         self::assertStringContainsString('contentType=image%2Fjpeg', $presigned->url());
-        self::assertStringContainsString('fileName=wohnzimmer-sud-0.jpg', $presigned->url());
+        // Deterministischer Dateiname (Prüfbericht 2026-09-11, Befund 6): uuid-medienid-sha12.ext
+        $titelbild = $listing->media()->where('sortierung', 0)->first();
+        self::assertStringContainsString('fileName='.$listing->uuid.'-'.$titelbild->id.'-'.substr($titelbild->pruefsumme_sha256, 0, 12).'.jpg', $presigned->url());
         self::assertMatchesRegularExpression('/fileSize=\d+/', $presigned->url());
 
         $upload = $fake->requests('PUT', self::S3)[0];
@@ -119,6 +121,7 @@ final class MediaSyncServiceTest extends FlowfactTestCase
 
         $ids = $listing->media()->orderBy('sortierung')->pluck('flowfact_multimedia_id')->all();
         self::assertSame(['101', '102'], $ids);
+        self::assertSame(['Titelbild', null], $listing->media()->orderBy('sortierung')->pluck('flowfact_titel')->all(), 'Übertragener Titel wird gemerkt (Befund 4).');
 
         // Albumauswahl wird je Schema in den Einstellungen gemerkt.
         self::assertSame(['album' => 'estate_album', 'bilder' => 'images', 'dokumente' => 'documents'], $this->settings()->get('flowfact.album_'.self::SCHEMA_MIETE));
@@ -127,7 +130,8 @@ final class MediaSyncServiceTest extends FlowfactTestCase
     public function test_kein_zweiter_upload_bei_vorhandener_id_und_album_aus_dem_cache(): void
     {
         $listing = $this->listingMitBildern(2);
-        $listing->media()->where('sortierung', 0)->update(['flowfact_multimedia_id' => '101']);
+        // flowfact_titel entspricht dem Titel, sonst würde ein PATCH gesendet (Befund 4).
+        $listing->media()->where('sortierung', 0)->update(['flowfact_multimedia_id' => '101', 'flowfact_titel' => 'Titelbild']);
         $this->settings()->set('flowfact.album_'.self::SCHEMA_MIETE, ['album' => 'estate_album', 'bilder' => 'images', 'dokumente' => null]);
         $fake = $this->fakeUploadKette();
 
@@ -142,7 +146,8 @@ final class MediaSyncServiceTest extends FlowfactTestCase
     public function test_ohne_offene_arbeit_wird_nichts_gesendet(): void
     {
         $listing = $this->listingMitBildern(1);
-        $listing->media()->update(['flowfact_multimedia_id' => '101']);
+        // Übertragener Titel entspricht dem lokalen Titel (Befund 4).
+        $listing->media()->update(['flowfact_multimedia_id' => '101', 'flowfact_titel' => 'Titelbild']);
         $this->settings()->set('flowfact.album_'.self::SCHEMA_MIETE, ['album' => 'estate_album', 'bilder' => 'images']);
         $fake = $this->fakeUploadKette();
 
@@ -178,6 +183,7 @@ final class MediaSyncServiceTest extends FlowfactTestCase
     {
         $listing = $this->listingMitBildern(2);
         $listing->media()->update(['flowfact_multimedia_id' => '555']);
+        $listing->media()->where('sortierung', 0)->update(['flowfact_titel' => 'Titelbild']);
         $this->settings()->set('flowfact.album_'.self::SCHEMA_MIETE, ['album' => 'estate_album', 'bilder' => 'images']);
 
         // Der Observer merkt das FLOWFACT-Item beim lokalen Löschen vor.
@@ -210,7 +216,10 @@ final class MediaSyncServiceTest extends FlowfactTestCase
         $listing = Listing::factory()->miete()->create();
         ListingMedia::factory()->create(['listing_id' => $listing->id, 'pfad' => 'listings/fehlt.jpg']);
 
-        $this->fake()->on('GET', self::ALBUMS, self::albumsResponse())->install();
+        $this->fake()
+            ->on('GET', self::ALBUMS, self::albumsResponse())
+            ->on('GET', self::ITEMS, [])
+            ->install();
         $ergebnis = app(MediaSyncService::class)->sync($listing->fresh(['media']), self::SCHEMA_MIETE, 'ent-1');
 
         self::assertStringContainsString('nicht gefunden', $ergebnis->warnungen[0]);

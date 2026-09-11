@@ -90,4 +90,22 @@ final class MultimediaService extends AbstractService
     {
         $this->client->delete(self::SERVICE, '/items/{id}', ['id' => $itemId]);
     }
+
+    /**
+     * Ändert Eigenschaften eines Items über JSON-Patch (flowfact-api.md
+     * Abschnitt 8), z. B. den Titel.
+     *
+     * @param  list<array{op: string, path: string, value?: mixed}>  $jsonPatch
+     * @return array<string, mixed> Das geänderte MultimediaItem
+     */
+    public function patchItem(string|int $itemId, array $jsonPatch): array
+    {
+        $antwort = $this->client->patch(self::SERVICE, '/items/{id}', ['id' => $itemId], $jsonPatch);
+
+        if (is_array($antwort) && isset($antwort['multimediaItem']) && is_array($antwort['multimediaItem'])) {
+            return $antwort['multimediaItem'];
+        }
+
+        return is_array($antwort) ? $antwort : [];
+    }
 }

@@ -21,6 +21,11 @@ use DateTimeInterface;
  */
 final class FlowfactPayloadMapper
 {
+    public const string WARNUNG_HEIZKOSTEN_ENTHALTEN = 'Heizkosten sind in den Nebenkosten enthalten und werden nicht separat übertragen';
+
+    /** @var list<string> */
+    private array $leereFelder = [];
+
     public function __construct(
         private readonly FieldMappingResolver $resolver,
     ) {}
@@ -30,15 +35,27 @@ final class FlowfactPayloadMapper
         $fields = [];
         $warnungen = [];
         $adresse = [];
+        $this->leereFelder = [];
 
         foreach (PublishableFields::LISTING as $feld) {
             $this->verarbeite($feld, $listing->getAttribute($feld), $fields, $warnungen, $adresse);
         }
 
         $price = $listing->price;
+        $heizkostenEnthalten = (bool) $price?->getAttribute('heizkosten_in_nebenkosten_enthalten');
 
         foreach (PublishableFields::PRICE as $feld) {
-            $this->verarbeite($feld, $price?->getAttribute($feld), $fields, $warnungen, $adresse);
+            $wert = $price?->getAttribute($feld);
+
+            // Prüfbericht 2026-09-11, Befund 13: Sind die Heizkosten in den
+            // Nebenkosten enthalten (Fall B), gehen sie nicht zusätzlich als
+            // eigener Wert an FLOWFACT, sonst würde das Portal sie doppelt zählen.
+            if ($feld === 'heizkosten_cent' && $heizkostenEnthalten && $wert !== null) {
+                $warnungen[] = self::WARNUNG_HEIZKOSTEN_ENTHALTEN;
+                $wert = null;
+            }
+
+            $this->verarbeite($feld, $wert, $fields, $warnungen, $adresse);
         }
 
         $energy = $listing->energy;
@@ -53,10 +70,16 @@ final class FlowfactPayloadMapper
         // Sync-Service sie vorher ablehnt.
         $fields['status'] = ['values' => ['active']];
 
+        $leereFelder = array_values(array_unique(array_filter(
+            $this->leereFelder,
+            static fn (string $ziel): bool => ! array_key_exists($ziel, $fields),
+        )));
+
         return new MappedPayload(
             fields: $fields,
             warnungen: array_values(array_unique($warnungen)),
             showAddress: (bool) $listing->getAttribute('adresse_im_inserat_anzeigen'),
+            leereFelder: $leereFelder,
         );
     }
 
@@ -97,6 +120,14 @@ final class FlowfactPayloadMapper
         }
 
         if ($wert === null || $wert === '') {
+            // Prüfbericht 2026-09-11, Befund 5: leere, aber zugeordnete Felder
+            // werden gemerkt, damit der PATCH sie in FLOWFACT löschen kann.
+            $ziel = $this->resolver->zielfeld($feld);
+
+            if ($ziel !== null) {
+                $this->leereFelder[] = $ziel;
+            }
+
             return;
         }
 
@@ -197,11 +228,15 @@ final class FlowfactPayloadMapper
         $plz = trim((string) ($adresse['plz'] ?? ''));
         $ort = trim((string) ($adresse['ort'] ?? ''));
 
+        $ziel = $this->resolver->zielfeld(FieldCatalog::ADRESSFELD);
+
         if ($strasse === '' && $plz === '' && $ort === '') {
+            if ($ziel !== null) {
+                $this->leereFelder[] = $ziel;
+            }
+
             return;
         }
-
-        $ziel = $this->resolver->zielfeld(FieldCatalog::ADRESSFELD);
 
         if ($ziel === null) {
             $warnungen[] = 'Keine FLOWFACT-Zuordnung für '.FieldCatalog::label(FieldCatalog::ADRESSFELD);

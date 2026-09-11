@@ -10,6 +10,7 @@ use App\Enums\PortalStatus;
 use App\Enums\SyncStatus;
 use App\Flowfact\Client\Exceptions\AuthenticationException;
 use App\Flowfact\Sync\FlowfactPublishingService;
+use App\Flowfact\Sync\Jobs\TransferListingJob;
 use App\Flowfact\Sync\PublishingService;
 use App\Models\Listing;
 use App\Models\ListingFlowfactLink;
@@ -17,6 +18,7 @@ use App\Models\ListingPortalPublication;
 use App\Models\User;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
 use Tests\Feature\Flowfact\Support\FakeFlowfact;
 
@@ -30,6 +32,10 @@ final class FlowfactPublishingServiceTest extends FlowfactTestCase
 
     private const string GET_ENTITY = '#^/entity-service/schemas/[^/]+/entities/[^/]+$#';
 
+    private const string ITEMS = '#^/multimedia-service/items/entities/[^/]+$#';
+
+    private const string ASSIGN = '#^/multimedia-service/assigned/schemas/[^/]+/entities/[^/]+$#';
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -37,6 +43,7 @@ final class FlowfactPublishingServiceTest extends FlowfactTestCase
         $this->hinterlegeToken();
         $this->setzeSchemata();
         Storage::fake('media');
+        $this->settings()->set('flowfact.album_'.self::SCHEMA_MIETE, ['album' => 'estate_album', 'bilder' => 'images']);
     }
 
     private function service(): FlowfactPublishingService
@@ -50,7 +57,7 @@ final class FlowfactPublishingServiceTest extends FlowfactTestCase
     private function uebertragenesListing(ListingStatus $status = ListingStatus::Bereit): Listing
     {
         $listing = $this->bereitesListing(['status' => $status]);
-        $listing->media()->update(['flowfact_multimedia_id' => '101']);
+        $listing->media()->update(['flowfact_multimedia_id' => '101', 'titel' => null, 'flowfact_titel' => null]);
         $listing = $listing->fresh(['price', 'energy', 'media']);
 
         ListingFlowfactLink::factory()->create([
@@ -217,6 +224,9 @@ final class FlowfactPublishingServiceTest extends FlowfactTestCase
         $fake = $this->fake()
             ->on('GET', self::GET_ENTITY, self::entityResponse('ent-1'))
             ->on('PATCH', self::GET_ENTITY, self::entityResponse('ent-1'))
+            // Bei geändertem Hash wird die Bildreihenfolge neu gesetzt (Befund 4).
+            ->on('GET', self::ITEMS, [self::multimediaItem(101)])
+            ->on('PUT', self::ASSIGN, ['assignments' => []])
             ->on('GET', self::PORTALS, self::portalsResponse())
             ->on('POST', self::PUBLISH, fn () => Http::response('', 200))
             ->install();
@@ -310,6 +320,9 @@ final class FlowfactPublishingServiceTest extends FlowfactTestCase
             'portal_id' => 'portal-is24',
             'status' => PortalStatus::Aktiv,
             'angefordert_at' => now()->subHour(),
+            // Ein aktives Portal trägt immer bestaetigt_at; nur ein nach bestätigter
+            // Aktivität zurückgezogenes Portal führt nach zurueckgezogen (Befund 1).
+            'bestaetigt_at' => now()->subMinutes(50),
         ]);
         $fake = $this->fakePortale(self::publishResponse('ent-1', transferiert: ['portal-is24']), online: []);
 
@@ -349,6 +362,38 @@ final class FlowfactPublishingServiceTest extends FlowfactTestCase
         self::assertSame(ListingStatus::Veroeffentlicht, $listing->fresh()->status);
 
         Carbon::setTestNow();
+    }
+
+    /**
+     * Prüfbericht 2026-09-11, Befund 15: Erreicht der synchrone Weg beim
+     * Bildupload das Zeitlimit, wird nicht veröffentlicht.
+     */
+    public function test_veroeffentlichung_bricht_ab_wenn_die_bilduebertragung_noch_offen_ist(): void
+    {
+        Queue::fake();
+        $listing = $this->bereitesListing();
+        Storage::disk('media')->put($listing->media()->first()->pfad, $this->beispielbild());
+
+        $fake = $this->fake()
+            ->on('POST', '#^/search-service/schemas/[^/]+$#', self::searchResponse([]))
+            ->on('POST', '#^/entity-service/schemas/[^/]+$#', self::entityResponse('ent-1'))
+            ->on('GET', self::PORTALS, self::portalsResponse())
+            ->on('POST', self::PUBLISH, fn () => Http::response('', 200))
+            ->install();
+
+        // Zeitlimit 0 Sekunden: der erste Bildupload liegt bereits hinter der Frist.
+        $service = app()->makeWith(FlowfactPublishingService::class, ['syncZeitlimitSekunden' => 0]);
+
+        $ergebnis = $service->publish($listing, ['portal-is24']);
+
+        self::assertFalse($ergebnis->ok);
+        self::assertSame(FlowfactPublishingService::MELDUNG_BILDER_OFFEN, $ergebnis->meldung);
+        self::assertSame(0, $fake->count('POST', self::PUBLISH), 'Kein Inserat mit unvollständigem Bildsatz.');
+        self::assertSame(1, $fake->count('POST', '#^/entity-service/schemas/[^/]+$#'), 'Die Entität wurde angelegt.');
+        self::assertSame(SyncStatus::GeaendertSeitUebertragung, $listing->flowfactLink()->first()->sync_status);
+        self::assertSame(ListingStatus::Bereit, $listing->fresh()->status);
+        self::assertSame(0, ListingPortalPublication::query()->count());
+        Queue::assertPushed(TransferListingJob::class);
     }
 
     public function test_publish_result_traegt_auth_ausnahme(): void

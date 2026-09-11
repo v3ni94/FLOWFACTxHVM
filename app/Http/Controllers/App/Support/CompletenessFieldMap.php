@@ -33,6 +33,7 @@ final class CompletenessFieldMap
         'preis.nebenkosten_cent' => 4,
         'preis.kaufpreis_cent' => 4,
         'preis.provision_text' => 4,
+        'preis.widerspruch' => 4,
         'medien.bild' => 5,
         'beschreibung_objekt' => 6,
     ];
