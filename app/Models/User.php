@@ -1,10 +1,13 @@
 <?php
 
+declare(strict_types=1);
+
 namespace App\Models;
 
 use App\Enums\UserRole;
 use Database\Factories\UserFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 
@@ -66,5 +69,25 @@ class User extends Authenticatable
     public function hasTwoFactorEnabled(): bool
     {
         return $this->two_factor_confirmed_at !== null;
+    }
+
+    /**
+     * Objekte, die dieser Benutzer angelegt hat.
+     *
+     * @return HasMany<Listing, $this>
+     */
+    public function listings(): HasMany
+    {
+        return $this->hasMany(Listing::class, 'erstellt_von_user_id');
+    }
+
+    /**
+     * Objekte, bei denen dieser Benutzer als Ansprechpartner hinterlegt ist.
+     *
+     * @return HasMany<Listing, $this>
+     */
+    public function ansprechpartnerFuer(): HasMany
+    {
+        return $this->hasMany(Listing::class, 'ansprechpartner_user_id');
     }
 }
