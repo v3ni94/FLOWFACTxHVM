@@ -1,0 +1,177 @@
+name: CI
+
+# Qualitätssicherung für Müller FLOW.
+#
+# Verbindliche Nachweise dieser Pipeline:
+# - Codestil (Pint)
+# - Testsuite gegen SQLite in-memory
+# - Migrationen laufen vorwärts, rückwärts und wieder vorwärts gegen MariaDB 10.11
+#
+# Kein Frontend-Build (ADR-002), deshalb keine npm-Schritte.
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Codestil (Pint)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: PHP einrichten
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: mbstring, intl, gd, zip, pdo_sqlite, fileinfo, openssl, ctype, dom, tokenizer
+          coverage: none
+
+      - name: Composer-Cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/composer
+          key: composer-${{ hashFiles('composer.lock') }}
+          restore-keys: composer-
+
+      - name: Abhängigkeiten installieren
+        run: composer install --no-interaction --prefer-dist --no-progress
+
+      - name: Pint
+        run: vendor/bin/pint --test
+
+  tests:
+    name: Tests (PHP 8.3, SQLite)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: PHP einrichten
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: mbstring, intl, gd, zip, pdo_sqlite, fileinfo, openssl, ctype, dom, tokenizer
+          coverage: none
+
+      - name: Composer-Cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/composer
+          key: composer-8.3-${{ hashFiles('composer.lock') }}
+          restore-keys: composer-8.3-
+
+      - name: Abhängigkeiten installieren
+        run: composer install --no-interaction --prefer-dist --no-progress
+
+      - name: Umgebung vorbereiten
+        run: |
+          cp .env.example .env
+          php artisan key:generate
+
+      - name: Testsuite
+        run: php artisan test
+        env:
+          APP_ENV: testing
+          DB_CONNECTION: sqlite
+          DB_DATABASE: ':memory:'
+          MAIL_MAILER: array
+          FILESYSTEM_DISK: local
+          AI_PROVIDER: fake
+
+  tests-mariadb:
+    name: Migrationen und Tests (PHP 8.3, MariaDB 10.11)
+    runs-on: ubuntu-latest
+
+    services:
+      mariadb:
+        image: mariadb:10.11
+        env:
+          MARIADB_ROOT_PASSWORD: ci-root
+          MARIADB_DATABASE: mueller_flow_test
+          MARIADB_USER: mueller_flow
+          MARIADB_PASSWORD: ci-secret
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: PHP einrichten
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: mbstring, intl, gd, zip, pdo_mysql, fileinfo, openssl, ctype, dom, tokenizer
+          coverage: none
+
+      - name: Composer-Cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/composer
+          key: composer-mariadb-${{ hashFiles('composer.lock') }}
+          restore-keys: composer-mariadb-
+
+      - name: Abhängigkeiten installieren
+        run: composer install --no-interaction --prefer-dist --no-progress
+
+      - name: Umgebung vorbereiten
+        run: |
+          cp .env.example .env
+          php artisan key:generate
+
+      - name: Migrationen vorwärts
+        run: php artisan migrate --force
+        env:
+          DB_CONNECTION: mariadb
+          DB_HOST: 127.0.0.1
+          DB_PORT: '3306'
+          DB_DATABASE: mueller_flow_test
+          DB_USERNAME: mueller_flow
+          DB_PASSWORD: ci-secret
+
+      - name: Migrationen rückwärts
+        run: php artisan migrate:rollback --force --step=1000
+        env:
+          DB_CONNECTION: mariadb
+          DB_HOST: 127.0.0.1
+          DB_PORT: '3306'
+          DB_DATABASE: mueller_flow_test
+          DB_USERNAME: mueller_flow
+          DB_PASSWORD: ci-secret
+
+      - name: Migrationen erneut vorwärts
+        run: php artisan migrate --force
+        env:
+          DB_CONNECTION: mariadb
+          DB_HOST: 127.0.0.1
+          DB_PORT: '3306'
+          DB_DATABASE: mueller_flow_test
+          DB_USERNAME: mueller_flow
+          DB_PASSWORD: ci-secret
+
+      - name: Testsuite
+        run: php artisan test
+        env:
+          APP_ENV: testing
+          DB_CONNECTION: mariadb
+          DB_HOST: 127.0.0.1
+          DB_PORT: '3306'
+          DB_DATABASE: mueller_flow_test
+          DB_USERNAME: mueller_flow
+          DB_PASSWORD: ci-secret
+          MAIL_MAILER: array
+          FILESYSTEM_DISK: local
+          AI_PROVIDER: fake

@@ -1,7 +1,6 @@
 <IfModule mod_rewrite.c>
-    <IfModule mod_negotiation.c>
-        Options -MultiViews -Indexes
-    </IfModule>
+    # Kein "Options"-Befehl: IONOS Webhosting erlaubt ihn in Kundenverzeichnissen
+    # nicht (AllowOverride ohne Options) und antwortet sonst mit Fehler 500.
 
     RewriteEngine On
 
@@ -14,6 +13,10 @@
     RewriteRule .* - [E=HTTP_X_XSRF_TOKEN:%{HTTP:X-XSRF-Token}]
 
     # Redirect Trailing Slashes If Not A Folder...
+    # Nur im ersten Durchlauf: nach einer internen Umschreibung aus der
+    # Wurzel-.htaccess (current/public/...) trägt %{REQUEST_URI} bereits den
+    # umgeschriebenen Pfad, ein Redirect würde ihn in die Adressleiste schreiben.
+    RewriteCond %{ENV:REDIRECT_STATUS} ^$
     RewriteCond %{REQUEST_FILENAME} !-d
     RewriteCond %{REQUEST_URI} (.+)/$
     RewriteRule ^ %1 [L,R=301]
@@ -22,4 +25,9 @@
     RewriteCond %{REQUEST_FILENAME} !-d
     RewriteCond %{REQUEST_FILENAME} !-f
     RewriteRule ^ index.php [L]
+</IfModule>
+
+# Versteckte Dateien im Webroot werden nie ausgeliefert.
+<IfModule mod_rewrite.c>
+    RewriteRule (^|/)\.(?!well-known/) - [F,L]
 </IfModule>

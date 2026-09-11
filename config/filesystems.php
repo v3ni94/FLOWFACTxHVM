@@ -33,7 +33,8 @@ return [
         'local' => [
             'driver' => 'local',
             'root' => storage_path('app/private'),
-            'serve' => true,
+            // Keine temporären URLs über /storage: Medien laufen über eigene signierte Routen (ADR-012).
+            'serve' => false,
             'throw' => false,
             'report' => false,
         ],
@@ -43,6 +44,16 @@ return [
             'root' => storage_path('app/public'),
             'url' => rtrim(env('APP_URL', 'http://localhost'), '/').'/storage',
             'visibility' => 'public',
+            'throw' => false,
+            'report' => false,
+        ],
+
+        // ADR-012: Objektmedien außerhalb des Webroots, Auslieferung nur über
+        // signierte Routen. Wurzel konfigurierbar über MEDIA_ROOT.
+        'media' => [
+            'driver' => 'local',
+            'root' => config('media.root'),
+            'visibility' => 'private',
             'throw' => false,
             'report' => false,
         ],

@@ -1,0 +1,64 @@
+# -----------------------------------------------------------------------------
+# Rückfalloption für den IONOS-Document-Root (docs/betrieb/installation.md)
+# -----------------------------------------------------------------------------
+#
+# Bevorzugt zeigt der Document Root im IONOS-Control-Center direkt auf
+# .../current/public. Dann wird diese Datei nie gelesen.
+#
+# Lässt sich der Document Root nicht auf public/ legen, zeigt er auf das
+# Verzeichnis, in dem diese Datei liegt. Dann schreibt sie jede Anfrage intern
+# nach public/ um und sperrt alles, was nie ausgeliefert werden darf.
+#
+# Unterstützte Verzeichnislayouts:
+#   Releaselayout:    <hier>/current/public   (Auslieferung über bin/deploy-sftp.php)
+#   Einfaches Layout: <hier>/public           (Repository direkt im Document Root)
+#
+# Reihenfolge ist verbindlich: erst sperren, dann umschreiben. Die Sperren
+# greifen auf den angefragten Pfad, bevor eine Umschreibung stattfindet.
+
+# Kein "Options"-Befehl: IONOS Webhosting erlaubt ihn in Kundenverzeichnissen
+# nicht und antwortet sonst mit Fehler 500. Verzeichnislisten sind ohne
+# Wirkung, weil jede Anfrage nach current/public/ umgeschrieben wird.
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+
+    # --- Sperren: diese Pfade werden nie ausgeliefert ------------------------
+    # .env, .git, .htaccess und jede andere versteckte Datei oder Verzeichnis
+    RewriteRule (^|/)\.(?!well-known/) - [F,L]
+    # Anwendungscode, Speicher, Abhängigkeiten, gemeinsame Dateien, Releases
+    RewriteRule ^(app|bootstrap|config|database|resources|routes|storage|tests|vendor|bin|docs|shared|releases)(/|$) - [F,L]
+    RewriteRule ^current/(?!public/) - [F,L]
+    # Konfigurations- und Metadateien im Wurzelverzeichnis
+    RewriteRule ^(artisan|composer\.(json|lock)|phpunit\.xml|pint\.json|[A-Z_]+\.md)$ - [F,L]
+
+    # --- Umleitungen vor der Umschreibung --------------------------------------
+    # Schrägstrich am Ende wird hier behandelt, weil public/.htaccess im
+    # zweiten Durchlauf nur noch den umgeschriebenen Pfad /current/public/...
+    # sieht und ihn sonst in die Adresszeile schreiben würde.
+    RewriteCond %{REQUEST_FILENAME} !-d
+    RewriteCond %{REQUEST_URI} (.+)/$
+    RewriteRule ^ %1 [L,R=301]
+
+    # --- Umschreiben nach public/ ---------------------------------------------
+    # Releaselayout: current/public liegt vor.
+    RewriteCond %{DOCUMENT_ROOT}/current/public -d
+    RewriteCond %{REQUEST_URI} !^/current/public/
+    RewriteRule ^(.*)$ current/public/$1 [L]
+
+    # Einfaches Layout: public liegt direkt hier.
+    RewriteCond %{DOCUMENT_ROOT}/current/public !-d
+    RewriteCond %{REQUEST_URI} !^/public/
+    RewriteRule ^(.*)$ public/$1 [L]
+</IfModule>
+
+# Ohne mod_rewrite gilt wenigstens die Dateisperre für .env und Logs.
+<FilesMatch "^(\.env.*|\.htaccess|.*\.log|.*\.sqlite|composer\.(json|lock))$">
+    <IfModule mod_authz_core.c>
+        Require all denied
+    </IfModule>
+    <IfModule !mod_authz_core.c>
+        Order allow,deny
+        Deny from all
+    </IfModule>
+</FilesMatch>
