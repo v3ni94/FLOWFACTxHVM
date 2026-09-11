@@ -206,16 +206,18 @@ Details: [betrieb/installation.md](betrieb/installation.md).
 Tests laufen lokal und in CI gegen SQLite in-memory. CI führt die Migrationen zusätzlich gegen MariaDB 10.11
 und 11.4 aus, vorwärts und rückwärts.
 
-## 8. Umsetzungsphasen und Modelleinsatz
+## 8. Umsetzungsphasen und Modelleinsatz (Ist-Stand 11.09.2026)
 
-| Phase | Inhalt | Modell |
-| --- | --- | --- |
-| 0 | Recherche FLOWFACT-SDK, Konventionen, Architektur, Datenvertrag | Sonnet (Extraktion), Fable (Verifikation, Architektur) |
-| 1 | Grundgerüst, Auth, Rollen, optionale 2FA, Sicherheitsheader, Deployment-Skelett | Sonnet |
-| 2 | Datenmodell, Migrationen, Preislogik, Vollständigkeitsprüfung, Tests | Sonnet |
-| 3 | Erfassungsassistent, Upload, Dashboard, Designtokens | Sonnet |
-| 4 | FLOWFACT-Connector, Mapper, Jobs, Statusprüfung, Contract-Tests | Fable |
-| 5 | KI-Texte, Adminbereich, Protokollansicht | Sonnet |
-| 6 | Kritische Prüfung der fünf Risikopunkte, CI, Doku, Abschlussbericht | Fable (Prüfung), Haiku (Doku-Korrekturen) |
+| Phase | Inhalt | Modell | Ergebnis |
+| --- | --- | --- | --- |
+| 0 | Recherche FLOWFACT-SDK und Konventionen des Schwesterprojekts, Architektur, Datenvertrag | Sonnet (Konventionen), Fable (SDK-Dokument, Verifikation, Architektur) | docs/flowfact-api.md mit 246 geprüften Aussagen |
+| 1 | Anmeldung, optionale 2FA, Rollen, Benutzerverwaltung; Layout, Sicherheitsheader, Konsole, Wartung, Deployment | zwei Sonnet-Agenten parallel | 87 Tests |
+| 2 | Datenmodell, Preislogik, Vollständigkeit, Statusautomaten, Nummernkreis, Einstellungen | Sonnet | 171 Tests |
+| 3 | Erfassungsassistent, Medien, Texte, Dashboard (Sonnet) parallel zum FLOWFACT-Connector mit Adminbereich und Smoke-Test (Fable) | Sonnet und Fable | 354 Tests |
+| 4 | KI-Texte mit dem Anthropic-SDK und Adminbereich (Sonnet) parallel zur kritischen Gesamtprüfung (Fable, nur lesend) | Sonnet und Fable | 390 Tests, Prüfbericht mit 19 Befunden |
+| 5 | Behebung der Befunde: Connector, Sync, Jobs (Fable) parallel zu Assistent, Medien, Sitzung (Sonnet), Regressionstests aus den Nachweisen des Prüfers | Fable und Sonnet | 439 Tests |
 
-Höchstens zwei Agenten gleichzeitig, getrennte Dateibereiche je Auftrag, Integration durch den Leitagenten.
+Höchstens zwei Entwicklungsagenten gleichzeitig, getrennte Dateibereiche je Auftrag, Integration, Commits und
+Stichprobenprüfung durch den Leitagenten. Ein erster Versuch, die SDK-Extraktion mit Sonnet als verschachteltes
+JSON zu erzwingen, scheiterte an der Ausgabeformatierung und wurde durch ein Markdown-Dokument mit Verifikationsrunde
+ersetzt.
