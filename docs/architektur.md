@@ -21,7 +21,7 @@ ehrlich, ob ein Objekt nur an FLOWFACT übertragen oder tatsächlich im Portal a
 | Warteschlange | Treiber database, Cron-getriebene kurze Läufe | Kein dauerhafter Prozess auf IONOS, siehe ADR-006 |
 | HTTP-Client | Laravel HTTP-Client (Guzzle) mit Http::fake in Tests | Contract-Tests ohne echte API |
 | KI-Texte | REST-Anbindung an die Anthropic Messages API, Modell konfigurierbar | Siehe ADR-009 |
-| Qualität | PHPUnit 11, Laravel Pint, PHPStan Level 6 (Larastan) | Wie Schwesterprojekt |
+| Qualität | PHPUnit 11, Laravel Pint; PHPStan Level 6 (Larastan) als Ziel vorgesehen, im aktuellen Stand noch nicht installiert | Wie Schwesterprojekt |
 | Deployment | SFTP-Release-Layout mit atomarem Umschalten und Smoke-Test, GitHub Actions | Übernommen aus Smart Abrechnen |
 | Zeitzone | Europe/Berlin | Siehe ADR-011 |
 
@@ -97,8 +97,9 @@ nachgerüstet, ohne dass sich der Rest des Connectors ändert.
 ### ADR-009: KI-Texte über eine Provider-Abstraktion, Modell konfigurierbar, Texte werden gespeichert
 
 Objektbeschreibungen entstehen auf ausdrückliche Anforderung des Benutzers aus den strukturierten Feldern des
-Objekts. Der Provider wird über REST angesprochen (kein SDK), das Modell steht in der Konfiguration und ist im
-Adminbereich änderbar. Jeder Vorschlag wird mit Modellkennung in `listing_texts` gespeichert; der Benutzer
+Objekts. Der Anbieter wird über das offizielle Anthropic-PHP-SDK angesprochen (Entscheidung nach der aktuellen
+API-Referenz, um Abweichungen in Parametern und Antwortformen zu vermeiden), das Modell steht in der Konfiguration
+und ist im Adminbereich änderbar (Standard claude-opus-5, alternativ claude-sonnet-5 oder claude-haiku-4-5). Jeder Vorschlag wird mit Modellkennung in `listing_texts` gespeichert; der Benutzer
 übernimmt ihn ausdrücklich. Interne Felder gehen nie in den Prompt. In Tests ist der Provider immer `fake`.
 Es gibt kein automatisches Regenerieren und keine Mehragenten-Orchestrierung im Produktbetrieb.
 
@@ -115,7 +116,9 @@ Protokollzeitstempel.
 ### ADR-012: Medien außerhalb des Webroots, Auslieferung über signierte Routen
 
 Uploads werden serverseitig auf Typ, Größe und Bildinhalt geprüft (finfo, getimagesize), unter neuem Namen
-außerhalb von `public` gespeichert und über signierte, an die Sitzung gebundene Routen ausgeliefert. Maximal
+außerhalb von `public` gespeichert und über zeitlich begrenzt signierte Routen (30 Minuten) ausgeliefert, die
+zusätzlich eine aktive Anmeldung voraussetzen. Die Signatur ist nicht an die Sitzung gebunden; da alle aktiven
+Benutzer alle Objekte sehen dürfen (Datenvertrag Abschnitt 6), ist das fachlich ausreichend. Maximal
 15 MB je Datei, 40 Dateien je Objekt. Bilder werden für die Vorschau mit GD verkleinert; die Übertragung an
 FLOWFACT erfolgt mit dem Original in Portalgröße (längste Seite höchstens 2000 Pixel, JPEG Qualität 85).
 
@@ -198,7 +201,7 @@ Details: [betrieb/installation.md](betrieb/installation.md).
 | Feature | Login mit und ohne 2FA, Rollen, Wizard-Schritte, Upload, Veröffentlichung nur aus bereit, Admin-Einstellungen |
 | Contract | FlowfactClient gegen Http::fake mit aufgezeichneten Antwortformen: Anlegen, Suche, Aktualisieren, Bildupload, Veröffentlichen, Statusabfrage, Fehler 401, 409, 500, Zeitüberschreitung |
 | Idempotenz | Zweifacher Lauf derselben Übertragung erzeugt genau einen Anlegeaufruf; Abbruch nach Anlegen führt beim Wiederholen zur Suche |
-| Statische Analyse | Pint, PHPStan Level 6 |
+| Statische Analyse | Pint; PHPStan Level 6 vorgesehen, siehe Stack-Tabelle |
 
 Tests laufen lokal und in CI gegen SQLite in-memory. CI führt die Migrationen zusätzlich gegen MariaDB 10.11
 und 11.4 aus, vorwärts und rückwärts.
