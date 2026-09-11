@@ -1,7 +1,7 @@
 # Architektur Müller FLOW
 
 Stand: 11.09.2026. Anwendung unter flowfact.muellerhv.de für die Hausverwaltung Müller GmbH.
-Fachlicher Datenvertrag: [datenvertrag.md](datenvertrag.md). FLOWFACT-API: [flowfact-api.md](flowfact-api.md).
+Fachlicher Datenvertrag: [datenvertrag.md](datenvertrag.md). FLOWFACT-API: [flowfact-api.md](flowfact-api.md). Connector-Entwurf: [connector.md](connector.md).
 Offene Punkte und Annahmen: [offene-punkte.md](offene-punkte.md).
 
 ## 1. Produkt in drei Sätzen
@@ -67,12 +67,15 @@ Multimedia-ID nur einmal hochgeladen.
 
 ### ADR-006: Datenbankgestützte Queue mit Cron-getriebenen kurzen Läufen
 
-Übernommen aus Smart Abrechnen. Ein einziger Cronjob ruft `php artisan schedule:run` auf. Der Scheduler startet
-`flow:queue-slice --max-time=45 --max-jobs=50` sowie `flow:portal-status` zur Statusprüfung veröffentlichter
-Objekte. Jeder Job ist idempotent und wiederanlaufbar. Ist nur ein Fünf-Minuten-Takt verfügbar, zeigt die
-Oberfläche die tatsächliche Verzögerung an. Übertragungen werden zusätzlich synchron aus der Oberfläche
-gestartet, wenn der Benutzer es wünscht (Schaltfläche "Jetzt übertragen"), mit hartem Zeitlimit; bei
-Zeitüberschreitung übernimmt die Queue.
+Übernommen aus Smart Abrechnen, aber mit dem Laravel-Standardworker statt eines eigenen Slice-Runners. Ein einziger
+Cronjob ruft jede Minute `php artisan schedule:run` auf. Der Scheduler startet `queue:work database
+--stop-when-empty --max-time=45 --tries=3 --backoff=30` ohne Überlappung, setzt ein Lebenszeichen im Cache
+(`scheduler.last_run`, ausgewertet von `flow:check-config`) und startet `flow:portal-status` für die
+Statusprüfung veröffentlichter Objekte. Jeder Job ist idempotent und wiederanlaufbar. Ist nur ein Fünf-Minuten-Takt
+verfügbar, zeigt die Oberfläche die tatsächliche Verzögerung an. Übertragungen werden zusätzlich synchron aus der
+Oberfläche gestartet, wenn der Benutzer es wünscht (Schaltfläche "Jetzt übertragen"), mit hartem Zeitlimit; bei
+Zeitüberschreitung übernimmt die Queue. Für Hosting ohne Shellzugang existiert `POST /wartung/schedule` mit
+eigenem Token.
 
 ### ADR-007: Zwei-Faktor-Authentifizierung ist optional
 
@@ -131,7 +134,7 @@ werden auf 4 KB gekürzt.
 
 ```
 app/
-  Console/Commands/        flow:install, flow:check-config, flow:queue-slice, flow:portal-status
+  Console/Commands/        flow:install, flow:check-config, flow:user:create, flow:portal-status, flow:flowfact:smoke, flow:flowfact:schema
   Domain/
     Listing/               Enums, RentCalculator, CompletenessCheck, ListingStatusMachine
     Security/              TimeBasedOneTimePassword, Base32, RecoveryCodeGenerator (übernommen)
