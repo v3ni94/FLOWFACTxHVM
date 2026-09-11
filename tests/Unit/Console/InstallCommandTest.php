@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Unit\Console;
 
+use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\File;
 use Tests\TestCase;
 
@@ -16,7 +17,7 @@ class InstallCommandTest extends TestCase
      */
     protected function tearDown(): void
     {
-        \Illuminate\Support\Facades\Artisan::call('optimize:clear');
+        Artisan::call('optimize:clear');
 
         parent::tearDown();
     }
