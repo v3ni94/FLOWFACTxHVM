@@ -53,6 +53,9 @@ Schlüssel:
 | `APP_DEBUG` | `false` |
 | `APP_URL` | `https://flowfact.muellerhv.de` |
 | `APP_KEY` | mit `php artisan key:generate --show` erzeugen und eintragen |
+| `APP_TIMEZONE` | `Europe/Berlin` |
+| `APP_LOCALE`, `APP_FALLBACK_LOCALE`, `APP_FAKER_LOCALE` | `de`, `de`, `de_DE`, sonst erscheinen Validierungsmeldungen auf Englisch |
+| `ANTHROPIC_API_KEY` | optional; der KI-Schlüssel kann alternativ im Adminbereich unter KI-Texte hinterlegt werden |
 | `DB_CONNECTION` | `mariadb` |
 | `DB_HOST`, `DB_DATABASE`, `DB_USERNAME`, `DB_PASSWORD` | **AUS IONOS-KONTO** |
 | `TRUSTED_PROXIES` | `*` (IONOS Webhosting veröffentlicht seine Proxy-Adressen nicht, siehe Architektur Abschnitt 5) |
