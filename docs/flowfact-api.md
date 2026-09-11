@@ -620,6 +620,32 @@ Die Abfragesprache kommt aus dem Paket `@flowfact/node-flowdsl` 3.0.0, das nicht
 
 Zusätzlich sichtbar: Builder-Aufrufe `target('ENTITY')`, `distinct(false)`, `withCondition([...])`, `fetch([...feldnamen])`, `condition.hasEntityIds(entityId)`. Quelle: src/service/SearchService/SearchService.js:322-325, :339-341, :357-366. Die exakten JSON-Schlüsselnamen, die der Builder daraus erzeugt (z. B. ob `target`, `distinct`, `conditions`, `fetch` auf oberster Ebene heißen), sind im Tarball nicht enthalten und am echten Konto zu prüfen (Abschnitt 9). Der Typ `HasFieldWithValueCondition` wird im Entity-Service referenziert. Quelle: src/service/EntityService/EntityService.Types.d.ts:1, :60
 
+**Nachtrag Flowdsl, bestätigt aus dem offiziellen Paket `@flowfact/node-flowdsl` 3.0.1**
+
+Das Builder-Paket ist als npm-Paket öffentlich und wurde nachgeladen. Damit ist die JSON-Form eines Flowdsl-Dokuments belegt (Quelle: node-flowdsl/README.md, Beispiele; node-flowdsl/src/DslBuilder.js:13-20; node-flowdsl/src/Flowdsl.d.ts:125-129):
+
+```json
+{
+  "target": "ENTITY",
+  "fetch": [],
+  "aggregations": [],
+  "conditions": [
+    { "type": "HASFIELDWITHVALUE", "field": "identifier", "value": "MF-2026-0001", "operator": "EQUALS" }
+  ],
+  "distinct": false,
+  "joins": [],
+  "sorts": [],
+  "schemaIds": []
+}
+```
+
+- Operatoren für `HASFIELDWITHVALUE`: `EQUALS`, `LIKE`, `GREATER`, `LESS`, `GREATER_EQUAL`, `LESS_EQUAL`, `NOT_EQUAL`, `IN`, `BETWEEN`, `OLDER_THAN_X_DAYS`. Standard des Builders ist `EQUALS`. Quelle: node-flowdsl/src/Flowdsl.d.ts:128; node-flowdsl/src/ConditionsBuilder.js:68
+- Bedingungstypen: `AND`, `OR`, `NOT`, `HASTAG`, `HASFIELD`, `HASFIELDWITHVALUE`, `HASRANGEOVERLAPPING`, `ENTITYID`, `SCHEMAID`, `SCHEMA`, `TAGID`, `GEOPOLYGON`, `GEOINFORMATION` (Groß- oder Kleinschreibung erlaubt). Quelle: node-flowdsl/src/Flowdsl.d.ts:127
+- `fetch` begrenzt die zurückgegebenen Felder, `sorts` erwartet `{ field, direction: ASC|DESC }`. Quelle: node-flowdsl/src/Flowdsl.d.ts:126; node-flowdsl/src/DslBuilder.d.ts
+- Ein Exakt-Vergleich ist damit möglich (`EQUALS`). Die offenen Punkte 13 und 14 in Abschnitt 9 sind aus Paketsicht geklärt; das Verhalten am Konto bleibt im Smoke-Test zu bestätigen.
+
+---
+
 ### 5.7 Vermarktungsphasen und Objektphasen
 
 **property-marketing-phase-service (PhasesController)**
@@ -830,8 +856,8 @@ Nicht aus dem SDK belegbar. Vor Produktivsetzung mit einem Testkonto klären und
 
 **Suche**
 
-13. Vollständige JSON-Form eines Flowdsl-Dokuments (Schlüssel der obersten Ebene).
-14. Verfügbare Operatoren neben `LIKE`, insbesondere ein Exakt-Vergleich.
+13. Vollständige JSON-Form eines Flowdsl-Dokuments: aus `@flowfact/node-flowdsl` 3.0.1 belegt (Nachtrag in 5.6), am Konto zu bestätigen.
+14. Operatoren: `EQUALS` und weitere aus `@flowfact/node-flowdsl` belegt (Nachtrag in 5.6), am Konto zu bestätigen.
 15. Ob die Suche über die Gruppe `estates` alle Estate-Schemata abdeckt und ob Papierkorb-Einträge ausgeschlossen sind.
 
 **Bilder und Dokumente**
