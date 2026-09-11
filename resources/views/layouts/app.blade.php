@@ -28,6 +28,9 @@
                     @if (Route::has('admin.users.index') && auth()->user()->isAdmin())
                         <a href="{{ route('admin.users.index') }}" class="{{ request()->routeIs('admin.users.*') ? 'is-active' : '' }}">Benutzer</a>
                     @endif
+                    @if (Route::has('admin.flowfact.edit') && auth()->user()->isAdmin())
+                        <a href="{{ route('admin.flowfact.edit') }}" class="{{ request()->routeIs('admin.flowfact.*') ? 'is-active' : '' }}">FLOWFACT</a>
+                    @endif
                 </nav>
 
                 <div class="app-user">

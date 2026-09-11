@@ -4,10 +4,14 @@ declare(strict_types=1);
 
 namespace App\Flowfact\Sync;
 
+use Throwable;
+
 final readonly class SyncResult
 {
     /**
      * @param  list<string>  $warnungen
+     * @param  Throwable|null  $ausnahme  Ursache eines Fehlers, damit Jobs zwischen
+     *                                    Ratenbegrenzung, Auth-Fehler und Transportfehler unterscheiden können
      */
     public function __construct(
         public bool $ok,
@@ -15,6 +19,7 @@ final readonly class SyncResult
         public ?string $entityId = null,
         public array $warnungen = [],
         public bool $busy = false,
+        public ?Throwable $ausnahme = null,
     ) {}
 
     public static function busy(): self
@@ -22,8 +27,11 @@ final readonly class SyncResult
         return new self(false, 'Für dieses Objekt läuft bereits eine Übertragung.', busy: true);
     }
 
-    public static function failed(string $meldung, array $warnungen = []): self
+    /**
+     * @param  list<string>  $warnungen
+     */
+    public static function failed(string $meldung, array $warnungen = [], ?Throwable $ausnahme = null): self
     {
-        return new self(false, $meldung, warnungen: $warnungen);
+        return new self(false, $meldung, warnungen: $warnungen, ausnahme: $ausnahme);
     }
 }

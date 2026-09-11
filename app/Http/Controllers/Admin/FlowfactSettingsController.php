@@ -1,0 +1,242 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Http\Controllers\Admin;
+
+use App\Domain\Settings\SettingsRepository;
+use App\Flowfact\Client\Exceptions\FlowfactException;
+use App\Flowfact\Client\SettingsTokenProvider;
+use App\Flowfact\Client\TokenScrubber;
+use App\Flowfact\Mapping\FieldMappingResolver;
+use App\Flowfact\Services\SchemaService;
+use App\Flowfact\Services\UserService;
+use App\Flowfact\Sync\ListingSyncService;
+use App\Http\Controllers\Controller;
+use App\Http\Requests\Admin\FlowfactSettingsRequest;
+use App\Http\Requests\Admin\FlowfactTokenRequest;
+use App\Models\TransferLog;
+use Illuminate\Http\RedirectResponse;
+use Illuminate\Support\Carbon;
+use Illuminate\View\View;
+use Throwable;
+
+/**
+ * FLOWFACT-Einstellungen (docs/connector.md Abschnitt 7).
+ *
+ * Der Token wird ausschließlich geschrieben, nie gelesen oder gerendert:
+ * die Ansicht erhält nur "hinterlegt am". Das ist die einzige Stelle, an der
+ * ein Administrator den Token setzt oder entfernt.
+ */
+class FlowfactSettingsController extends Controller
+{
+    public const string TOKEN_HINTERLEGT_AT = 'flowfact.token_hinterlegt_at';
+
+    public const string VERBINDUNG_GEPRUEFT_AT = 'flowfact.verbindung_geprueft_at';
+
+    public const string VERBINDUNG_ERGEBNIS = 'flowfact.verbindung_ergebnis';
+
+    public const string SCHEMATA = 'flowfact.schemata';
+
+    public function edit(SettingsRepository $settings, FieldMappingResolver $resolver): View
+    {
+        $schemaMiete = $this->text($settings->get(ListingSyncService::SCHEMA_MIETE));
+        $schemaKauf = $this->text($settings->get(ListingSyncService::SCHEMA_KAUF));
+
+        return view('admin.flowfact.edit', [
+            'tokenHinterlegt' => $settings->hasSecret(SettingsTokenProvider::TOKEN_KEY),
+            'tokenHinterlegtAt' => $this->datum($settings->get(self::TOKEN_HINTERLEGT_AT)),
+            'companyId' => $this->text($settings->get(SettingsTokenProvider::COMPANY_KEY)),
+            'schemaMiete' => $schemaMiete,
+            'schemaKauf' => $schemaKauf,
+            'schemata' => $this->liste($settings->get(self::SCHEMATA)),
+            'verbindungGeprueftAt' => $this->datum($settings->get(self::VERBINDUNG_GEPRUEFT_AT)),
+            'verbindungErgebnis' => $this->text($settings->get(self::VERBINDUNG_ERGEBNIS)),
+            'felder' => $resolver->felder(),
+            'codes' => $resolver->codes(),
+            'schemaFelder' => $this->schemaFelder($settings, array_filter([$schemaMiete, $schemaKauf])),
+            'logs' => TransferLog::query()->latest()->limit(30)->get(),
+        ]);
+    }
+
+    public function storeToken(FlowfactTokenRequest $request, SettingsRepository $settings): RedirectResponse
+    {
+        $settings->setSecret(SettingsTokenProvider::TOKEN_KEY, trim($request->string('api_token')->value()));
+        $settings->set(self::TOKEN_HINTERLEGT_AT, Carbon::now()->toIso8601String());
+        $settings->forget(self::VERBINDUNG_GEPRUEFT_AT);
+        $settings->forget(self::VERBINDUNG_ERGEBNIS);
+
+        return redirect()->route('admin.flowfact.edit')
+            ->with('status', 'Der API-Token wurde hinterlegt. Bitte prüfen Sie die Verbindung.');
+    }
+
+    public function destroyToken(SettingsRepository $settings): RedirectResponse
+    {
+        $settings->forget(SettingsTokenProvider::TOKEN_KEY);
+        $settings->forget(self::TOKEN_HINTERLEGT_AT);
+        $settings->forget(self::VERBINDUNG_GEPRUEFT_AT);
+        $settings->forget(self::VERBINDUNG_ERGEBNIS);
+
+        return redirect()->route('admin.flowfact.edit')
+            ->with('status', 'Der API-Token wurde entfernt. Übertragungen sind bis zur erneuten Hinterlegung nicht möglich.');
+    }
+
+    public function updateSettings(FlowfactSettingsRequest $request, SettingsRepository $settings): RedirectResponse
+    {
+        $this->setzeOderVergesse($settings, SettingsTokenProvider::COMPANY_KEY, $request->input('company_id'));
+        $this->setzeOderVergesse($settings, ListingSyncService::SCHEMA_MIETE, $request->input('schema_miete'));
+        $this->setzeOderVergesse($settings, ListingSyncService::SCHEMA_KAUF, $request->input('schema_kauf'));
+
+        return redirect()->route('admin.flowfact.edit')
+            ->with('status', 'Die FLOWFACT-Einstellungen wurden gespeichert.');
+    }
+
+    /**
+     * Verbindungstest über GET user-service/users/currentUser. Das Ergebnis
+     * enthält nie den Token, Fehlermeldungen sind bereinigt.
+     */
+    public function testConnection(SettingsRepository $settings, UserService $users, TokenScrubber $scrubber): RedirectResponse
+    {
+        if (! $settings->hasSecret(SettingsTokenProvider::TOKEN_KEY)) {
+            return redirect()->route('admin.flowfact.edit')
+                ->with('error', 'Es ist kein API-Token hinterlegt.');
+        }
+
+        try {
+            $user = $users->currentUser();
+            $ergebnis = sprintf(
+                'Verbunden als %s (Typ %s), Company %s.',
+                (string) ($user['loginRelatedMailAddress'] ?? $user['businessMailAddress'] ?? $user['loginName'] ?? $user['id'] ?? 'unbekannt'),
+                (string) ($user['type'] ?? 'unbekannt'),
+                (string) ($user['companyId'] ?? 'unbekannt'),
+            );
+            $erfolgreich = true;
+        } catch (FlowfactException $exception) {
+            $ergebnis = 'Fehler: '.$exception->getMessage();
+            $erfolgreich = false;
+        } catch (Throwable $exception) {
+            $ergebnis = 'Fehler: '.$scrubber->scrub($exception->getMessage());
+            $erfolgreich = false;
+        }
+
+        $settings->set(self::VERBINDUNG_GEPRUEFT_AT, Carbon::now()->toIso8601String());
+        $settings->set(self::VERBINDUNG_ERGEBNIS, mb_substr((string) $scrubber->scrub($ergebnis), 0, 1000));
+
+        return redirect()->route('admin.flowfact.edit')
+            ->with($erfolgreich ? 'status' : 'error', $erfolgreich ? 'Verbindungstest erfolgreich: '.$ergebnis : 'Verbindungstest fehlgeschlagen. '.$ergebnis);
+    }
+
+    /**
+     * Lädt die Estate-Schemata des Kontos und die Properties der gewählten
+     * Schemata in die Einstellungen (Auswahl der Zielfelder im Formular).
+     */
+    public function loadSchemas(SettingsRepository $settings, SchemaService $schemaService, TokenScrubber $scrubber): RedirectResponse
+    {
+        if (! $settings->hasSecret(SettingsTokenProvider::TOKEN_KEY)) {
+            return redirect()->route('admin.flowfact.edit')
+                ->with('error', 'Es ist kein API-Token hinterlegt.');
+        }
+
+        try {
+            $schemata = $schemaService->estateSchemas();
+            $settings->set(self::SCHEMATA, $schemata);
+
+            foreach ($schemata as $schema) {
+                $definition = $schemaService->schema($schema['name']);
+                $settings->set('flowfact.schema_cache_'.$schema['name'], [
+                    'name' => $schema['name'],
+                    'geladen_at' => Carbon::now()->toIso8601String(),
+                    'properties' => SchemaService::properties($definition),
+                ]);
+            }
+        } catch (FlowfactException $exception) {
+            return redirect()->route('admin.flowfact.edit')
+                ->with('error', 'Schemata konnten nicht geladen werden: '.$exception->getMessage());
+        } catch (Throwable $exception) {
+            return redirect()->route('admin.flowfact.edit')
+                ->with('error', 'Schemata konnten nicht geladen werden: '.$scrubber->scrub($exception->getMessage()));
+        }
+
+        return redirect()->route('admin.flowfact.edit')
+            ->with('status', sprintf('%d Estate-Schema(ta) geladen.', count($schemata)));
+    }
+
+    private function setzeOderVergesse(SettingsRepository $settings, string $schluessel, mixed $wert): void
+    {
+        $text = is_string($wert) ? trim($wert) : '';
+
+        if ($text === '') {
+            $settings->forget($schluessel);
+
+            return;
+        }
+
+        $settings->set($schluessel, $text);
+    }
+
+    /**
+     * Zielfelder aus den zwischengespeicherten Schemata, vereinigt über
+     * Miete und Kauf.
+     *
+     * @param  array<int, string>  $schemaNamen
+     * @return array<string, array{type: string, caption: string}>
+     */
+    private function schemaFelder(SettingsRepository $settings, array $schemaNamen): array
+    {
+        $felder = [];
+
+        foreach ($schemaNamen as $name) {
+            $cache = $settings->get('flowfact.schema_cache_'.$name);
+
+            if (is_array($cache) && is_array($cache['properties'] ?? null)) {
+                foreach ($cache['properties'] as $feld => $definition) {
+                    if (is_string($feld) && is_array($definition)) {
+                        $felder[$feld] = ['type' => (string) ($definition['type'] ?? ''), 'caption' => (string) ($definition['caption'] ?? $feld)];
+                    }
+                }
+            }
+        }
+
+        ksort($felder);
+
+        return $felder;
+    }
+
+    private function text(mixed $wert): ?string
+    {
+        return is_string($wert) && trim($wert) !== '' ? trim($wert) : null;
+    }
+
+    private function datum(mixed $wert): ?Carbon
+    {
+        if (! is_string($wert) || $wert === '') {
+            return null;
+        }
+
+        try {
+            return Carbon::parse($wert);
+        } catch (Throwable) {
+            return null;
+        }
+    }
+
+    /**
+     * @return list<array{name: string, caption: string}>
+     */
+    private function liste(mixed $wert): array
+    {
+        if (! is_array($wert)) {
+            return [];
+        }
+
+        $liste = [];
+
+        foreach ($wert as $eintrag) {
+            if (is_array($eintrag) && isset($eintrag['name']) && is_string($eintrag['name'])) {
+                $liste[] = ['name' => $eintrag['name'], 'caption' => (string) ($eintrag['caption'] ?? $eintrag['name'])];
+            }
+        }
+
+        return $liste;
+    }
+}

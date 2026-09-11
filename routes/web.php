@@ -5,6 +5,11 @@ use App\Http\Controllers\Account\PasswordController;
 use App\Http\Controllers\Account\TwoFactorController;
 use App\Http\Controllers\Admin\UserController;
 use App\Http\Controllers\App\DashboardController;
+use App\Http\Controllers\App\ListingController;
+use App\Http\Controllers\App\ListingMediaController;
+use App\Http\Controllers\App\ListingTextController;
+use App\Http\Controllers\App\ListingWizardController;
+use App\Http\Controllers\App\MediaStreamController;
 use App\Http\Controllers\Auth\LoginController;
 use App\Http\Controllers\Auth\TwoFactorChallengeController;
 use App\Http\Middleware\EnsureUserIsActive;
@@ -28,6 +33,35 @@ Route::middleware(['auth', EnsureUserIsActive::class])->group(function () {
     Route::post('/logout', [LoginController::class, 'destroy'])->name('logout');
 
     Route::get('/app/dashboard', [DashboardController::class, 'index'])->name('app.dashboard');
+
+    Route::get('/app/objekte', [ListingController::class, 'index'])->name('app.listings.index');
+    Route::post('/app/objekte', [ListingController::class, 'store'])->name('app.listings.create');
+    Route::get('/app/objekte/{listing}', [ListingController::class, 'show'])->name('app.listings.show');
+    Route::post('/app/objekte/{listing}/archivieren', [ListingController::class, 'archive'])->name('app.listings.archive');
+    Route::post('/app/objekte/{listing}/status/bereit', [ListingController::class, 'markiereBereit'])->name('app.listings.status.bereit');
+    Route::post('/app/objekte/{listing}/uebertragen', [ListingController::class, 'transfer'])->name('app.listings.transfer');
+    Route::post('/app/objekte/{listing}/veroeffentlichen', [ListingController::class, 'publish'])->name('app.listings.publish');
+    Route::post('/app/objekte/{listing}/zurueckziehen', [ListingController::class, 'withdraw'])->name('app.listings.withdraw');
+
+    Route::get('/app/objekte/{listing}/schritt/{schritt}', [ListingWizardController::class, 'step'])
+        ->whereNumber('schritt')
+        ->name('app.listings.step');
+    Route::post('/app/objekte/{listing}/schritt/{schritt}', [ListingWizardController::class, 'stepStore'])
+        ->whereNumber('schritt')
+        ->name('app.listings.step.store');
+
+    Route::post('/app/objekte/{listing}/medien', [ListingMediaController::class, 'store'])->name('app.listings.media.store');
+    Route::delete('/app/objekte/{listing}/medien/{media}', [ListingMediaController::class, 'destroy'])->name('app.listings.media.destroy');
+    Route::post('/app/objekte/{listing}/medien/sortierung', [ListingMediaController::class, 'sort'])->name('app.listings.media.sort');
+    Route::post('/app/objekte/{listing}/medien/{media}', [ListingMediaController::class, 'update'])->name('app.listings.media.update');
+
+    Route::post('/app/objekte/{listing}/texte/vorschlag', [ListingTextController::class, 'generate'])->name('app.listings.texts.generate');
+    Route::post('/app/objekte/{listing}/texte/{text}/uebernehmen', [ListingTextController::class, 'accept'])->name('app.listings.texts.accept');
+
+    Route::get('/medien/{media}/{variante}', [MediaStreamController::class, 'show'])
+        ->where('variante', 'original|vorschau')
+        ->middleware('signed')
+        ->name('app.media.show');
 
     Route::get('/account', [AccountController::class, 'edit'])->name('account.edit');
     Route::put('/account/password', [PasswordController::class, 'update'])->name('account.password.update');

@@ -9,6 +9,18 @@ use Tests\TestCase;
 
 class InstallCommandTest extends TestCase
 {
+    /**
+     * flow:install schreibt Config-, Routen- und View-Caches nach bootstrap/cache.
+     * Ohne Aufräumen würde die gecachte Konfiguration alle folgenden Tests
+     * beeinflussen (bootstrap/providers.php wird dann nicht mehr gelesen).
+     */
+    protected function tearDown(): void
+    {
+        \Illuminate\Support\Facades\Artisan::call('optimize:clear');
+
+        parent::tearDown();
+    }
+
     public function test_flow_install_runs_twice_on_sqlite_without_error(): void
     {
         // Eigenes, garantiert beschreibbares Medienverzeichnis für den Test.

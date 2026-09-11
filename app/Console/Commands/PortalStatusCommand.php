@@ -1,0 +1,84 @@
+<?php
+
+declare(strict_types=1);
+
+namespace App\Console\Commands;
+
+use App\Enums\PortalStatus;
+use App\Flowfact\Sync\FlowfactPublishingService;
+use App\Flowfact\Sync\Jobs\RefreshPortalStatusJob;
+use App\Flowfact\Sync\PublishingService;
+use App\Models\Listing;
+use App\Models\ListingPortalPublication;
+use Illuminate\Console\Command;
+use Illuminate\Support\Carbon;
+use Symfony\Component\Console\Command\Command as CommandAlias;
+use Throwable;
+
+/**
+ * flow:portal-status
+ *
+ * Statusprüfung veröffentlichter Objekte (docs/connector.md Abschnitt 5,
+ * Punkt 3). Läuft alle fünf Minuten über den Scheduler: Objekte mit
+ * "angefordert" bei jedem Lauf, Objekte mit "aktiv" nur, wenn die letzte
+ * Prüfung älter als 60 Minuten ist. Angeforderte Veröffentlichungen ohne
+ * Rücklesen nach 30 Minuten werden "unbekannt".
+ */
+class PortalStatusCommand extends Command
+{
+    protected $signature = 'flow:portal-status';
+
+    protected $description = 'Liest den Portalstatus veröffentlichter Objekte aus FLOWFACT nach.';
+
+    public function handle(PublishingService $service, FlowfactPublishingService $flowfact): int
+    {
+        $intervall = (int) config('flowfact.portal_status.aktiv_pruefintervall_minuten', 60);
+        $grenze = Carbon::now()->subMinutes($intervall);
+
+        $listingIds = ListingPortalPublication::query()
+            ->where(function ($query) use ($grenze): void {
+                $query->where('status', PortalStatus::Angefordert->value)
+                    ->orWhere(function ($aktiv) use ($grenze): void {
+                        $aktiv->where('status', PortalStatus::Aktiv->value)
+                            ->where(function ($pruefung) use ($grenze): void {
+                                $pruefung->whereNull('letzte_pruefung_at')->orWhere('letzte_pruefung_at', '<', $grenze);
+                            });
+                    });
+            })
+            ->distinct()
+            ->pluck('listing_id');
+
+        if ($listingIds->isEmpty()) {
+            $this->line('Keine Objekte zu prüfen.');
+
+            return CommandAlias::SUCCESS;
+        }
+
+        if (! $service->isConfigured()) {
+            $markiert = 0;
+
+            foreach (Listing::query()->whereIn('id', $listingIds)->get() as $listing) {
+                $markiert += $flowfact->markiereUeberfaellige($listing);
+            }
+
+            $this->warn(sprintf('FLOWFACT ist nicht konfiguriert, kein Rücklesen möglich. %d überfällige Anforderung(en) als unbekannt markiert.', $markiert));
+
+            return CommandAlias::SUCCESS;
+        }
+
+        $fehler = 0;
+
+        foreach ($listingIds as $listingId) {
+            try {
+                (new RefreshPortalStatusJob((int) $listingId))->handle($service);
+            } catch (Throwable $exception) {
+                $fehler++;
+                $this->error(sprintf('Objekt %d: %s', (int) $listingId, $exception->getMessage()));
+            }
+        }
+
+        $this->info(sprintf('%d Objekt(e) geprüft, %d Fehler.', $listingIds->count(), $fehler));
+
+        return $fehler === 0 ? CommandAlias::SUCCESS : CommandAlias::FAILURE;
+    }
+}

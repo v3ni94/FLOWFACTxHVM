@@ -34,3 +34,10 @@ Schedule::command('queue:work database --stop-when-empty --max-time=45 --tries=3
 
 Schedule::command('flow:check-config --quiet')
     ->dailyAt('06:00');
+
+// Statusprüfung veröffentlichter Objekte (docs/connector.md Abschnitt 5):
+// alle fünf Minuten, ohne Überlappung. "aktiv" wird ausschließlich aus dem
+// Rücklesen gesetzt, nie aus dem Absenden des Veröffentlichungsbefehls.
+Schedule::command('flow:portal-status')
+    ->everyFiveMinutes()
+    ->withoutOverlapping();
