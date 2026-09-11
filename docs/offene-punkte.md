@@ -30,3 +30,17 @@ FLOWFACT), Antwortformat der Statusabfrage, Limits für Bildgröße und Anzahl.
 | Import bestehender FLOWFACT-Objekte | Nicht Ziel der Anwendung; kann später als Leseabgleich ergänzt werden |
 | Exposé-PDF | FLOWFACT erzeugt Exposés; keine doppelte Funktion |
 | Automatische Veröffentlichung nach Erfassung | Widerspricht der Regel, dass Veröffentlichung eine bestätigte Benutzeraktion ist |
+
+## Aus der kritischen Prüfung vom 11.09.2026 (docs/pruefbericht-2026-09-11.md)
+
+Die Befunde 1 bis 18 wurden nach der Prüfung behoben oder dokumentiert. Am echten Konto bleiben zu verifizieren:
+
+| Punkt | Warum offen | Verhalten der Anwendung bis zur Klärung |
+| --- | --- | --- |
+| Löschen geleerter Felder per PATCH mit leerer Werteliste (`{"values": []}`) | Serversemantik nicht aus dem SDK belegbar | Einstellung `flowfact.leere_felder_loeschen` (Standard an); bei Fehlern am Konto abschaltbar |
+| Titeländerung von Bildern über `PATCH /items/{id}` (JSON-Patch auf `title`) | Feldpfad im SDK belegt, Serverantwort nicht | Wird gesendet, Fehler erscheinen im Übertragungsprotokoll |
+| Wiedererkennung bereits hochgeladener Bilder über den deterministischen Dateinamen | Ob FLOWFACT den Dateinamen unverändert zurückliefert, ist zu prüfen | Schutz gegen Doppeluploads nach Zeitüberschreitung; ohne Wiedererkennung entsteht schlimmstenfalls ein doppeltes Bild, keine doppelte Immobilie |
+| Wechsel der Vermarktungsart nach der Übertragung | Erfordert in FLOWFACT einen Schemawechsel | Übertragung wird mit klarer Meldung verweigert, Objekt in FLOWFACT manuell prüfen oder neues Objekt anlegen |
+
+Zusätzlich behoben ohne Kontobezug: Die ursprüngliche `composer.lock` war für PHP 8.4 aufgelöst und hätte die
+Installation auf PHP 8.3 blockiert; die Abhängigkeiten wurden für PHP 8.3 neu aufgelöst (Plattformprüfung bestanden).
