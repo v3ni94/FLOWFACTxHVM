@@ -31,6 +31,9 @@
                     @if (Route::has('admin.flowfact.edit') && auth()->user()->isAdmin())
                         <a href="{{ route('admin.flowfact.edit') }}" class="{{ request()->routeIs('admin.flowfact.*') ? 'is-active' : '' }}">FLOWFACT</a>
                     @endif
+                    @if (Route::has('admin.ki.edit') && auth()->user()->isAdmin())
+                        <a href="{{ route('admin.ki.edit') }}" class="{{ request()->routeIs('admin.ki.*') ? 'is-active' : '' }}">KI-Texte</a>
+                    @endif
                 </nav>
 
                 <div class="app-user">

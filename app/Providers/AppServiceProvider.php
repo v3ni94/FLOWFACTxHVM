@@ -7,6 +7,7 @@ use App\Flowfact\Client\SettingsTokenProvider;
 use App\Flowfact\Sync\FlowfactPublishingService;
 use App\Flowfact\Sync\NullPublishingService;
 use App\Flowfact\Sync\PublishingService;
+use App\Services\Ai\AnthropicTextGenerator;
 use App\Services\Ai\FakeTextGenerator;
 use App\Services\Ai\TextGenerator;
 use Illuminate\Support\ServiceProvider;
@@ -27,7 +28,17 @@ class AppServiceProvider extends ServiceProvider
                 ? $app->make(FlowfactPublishingService::class)
                 : $app->make(NullPublishingService::class);
         });
-        $this->app->bind(TextGenerator::class, FakeTextGenerator::class);
+        // KI-Textvorschläge (ADR-009): der echte Anbieter wird nur genutzt,
+        // wenn er als aktiv ausgewählt ist UND ein Schlüssel vorliegt. Je
+        // Auflösung geprüft, damit eine im laufenden Betrieb geänderte
+        // Einstellung sofort wirkt. In Tests bleibt der Provider "fake"
+        // (phpunit.xml, AI_PROVIDER), sodass hier nie ein echter Aufruf
+        // entsteht.
+        $this->app->bind(TextGenerator::class, function ($app): TextGenerator {
+            $anthropic = $app->make(AnthropicTextGenerator::class);
+
+            return $anthropic->isConfigured() ? $anthropic : $app->make(FakeTextGenerator::class);
+        });
     }
 
     /**

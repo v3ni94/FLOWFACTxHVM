@@ -5,6 +5,10 @@
 @section('content')
     @include('app.listings.schritte._header')
 
+    @if (app(\App\Services\Ai\TextGenerator::class)->modell() === 'fake')
+        <div class="alert alert-info" role="status">Kein KI-Anbieter konfiguriert. Die Vorschläge sind Platzhaltertexte.</div>
+    @endif
+
     <div class="card">
         <div class="card-title">Textvorschlag erzeugen</div>
         <div class="card-body">
