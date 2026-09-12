@@ -107,9 +107,10 @@ php <SFTP_DEPLOY_ROOT>/current/artisan flow:install --no-interaction
 ```
 
 **b) URL-Cronjob** (wenn kein CLI-Cronjob verfügbar ist): einen HTTP-Cronjob **AUS IONOS-KONTO** einrichten,
-der per POST `https://flowfact.muellerhv.de/wartung/install` mit Header `X-Cron-Token: <CRON_INSTALL_TOKEN>`
-aufruft. Der Endpunkt antwortet mit JSON `{"success": true, "output": "..."}`. Ohne gesetzten
-`CRON_INSTALL_TOKEN` liefert die Route 404 (deaktiviert), bei falschem Token 403, bei GET 405.
+der `https://flowfact.muellerhv.de/wartung/install?token=<CRON_INSTALL_TOKEN>` aufruft (GET oder POST;
+alternativ Header `X-Cron-Token`). Derselbe Link lässt sich einmalig im Browser öffnen. Der Endpunkt antwortet
+mit JSON `{"success": true, "output": "..."}`. Ohne gesetzten `CRON_INSTALL_TOKEN` liefert die Route 404
+(deaktiviert), bei falschem oder fehlendem Token 403. Den Token nicht als Lesezeichen speichern oder weitergeben.
 
 ## 8. Laufender Scheduler (jede Minute)
 
@@ -123,8 +124,9 @@ Der Anwendungsscheduler (`routes/console.php`) startet die Warteschlange (`queue
 php <SFTP_DEPLOY_ROOT>/current/artisan schedule:run
 ```
 
-**b) URL-Cronjob**, wenn kein CLI-Cronjob im Minutentakt verfügbar ist: POST
-`https://flowfact.muellerhv.de/wartung/schedule` mit Header `X-Cron-Token: <CRON_SCHEDULE_TOKEN>`. Ist nur ein
+**b) URL-Cronjob**, wenn kein CLI-Cronjob im Minutentakt verfügbar ist:
+`https://flowfact.muellerhv.de/wartung/schedule?token=<CRON_SCHEDULE_TOKEN>` (GET oder POST; alternativ
+Header `X-Cron-Token`). Ist nur ein
 Fünf-Minuten-Takt verfügbar, zeigt `flow:check-config` die tatsächliche Verzögerung des letzten Laufs an
 (Fehler erst ab mehr als 15 Minuten ohne Lauf).
 

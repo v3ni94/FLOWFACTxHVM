@@ -64,7 +64,7 @@ vendor/bin/pint --test
 | `flow:flowfact:schema` | Estate-Schemata des Kontos lesen, mit `--schema=` Felder und fehlende Zuordnungen anzeigen |
 | `flow:portal-status` | Portalstatus veröffentlichter Objekte nachlesen (läuft alle fünf Minuten über den Scheduler) |
 
-Scheduler: ein Cronjob pro Minute `php artisan schedule:run`, alternativ `POST /wartung/schedule` mit Header
+Scheduler: ein Cronjob pro Minute `php artisan schedule:run`, alternativ `/wartung/schedule?token=...` per URL-Cronjob oder Header
 `X-Cron-Token` (siehe Installationsanleitung).
 
 ## Bereiche der Anwendung

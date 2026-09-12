@@ -47,11 +47,27 @@ class WartungEndpointsTest extends TestCase
         $this->assertArrayHasKey('output', $response->json());
     }
 
-    public function test_schedule_endpoint_rejects_get(): void
+    public function test_schedule_endpoint_rejects_get_without_token(): void
     {
         config(['deploy.cron_schedule_token' => 'geheimer-wert']);
 
-        $this->get('/wartung/schedule')->assertStatus(405);
+        $this->get('/wartung/schedule')->assertStatus(403);
+    }
+
+    public function test_schedule_endpoint_accepts_get_with_token_parameter(): void
+    {
+        config(['deploy.cron_schedule_token' => 'geheimer-wert']);
+
+        $this->get('/wartung/schedule?token=geheimer-wert')
+            ->assertOk()
+            ->assertJson(['success' => true]);
+    }
+
+    public function test_schedule_endpoint_rejects_get_with_wrong_token_parameter(): void
+    {
+        config(['deploy.cron_schedule_token' => 'geheimer-wert']);
+
+        $this->get('/wartung/schedule?token=falsch')->assertStatus(403);
     }
 
     // ------------------------------------------------------------------
@@ -85,10 +101,20 @@ class WartungEndpointsTest extends TestCase
         $this->assertArrayHasKey('output', $response->json());
     }
 
-    public function test_install_endpoint_rejects_get(): void
+    public function test_install_endpoint_rejects_get_without_token(): void
     {
         config(['deploy.cron_install_token' => 'geheimer-wert']);
 
-        $this->get('/wartung/install')->assertStatus(405);
+        $this->get('/wartung/install')->assertStatus(403);
+    }
+
+    public function test_install_endpoint_accepts_get_with_token_parameter(): void
+    {
+        config(['deploy.cron_install_token' => 'geheimer-wert']);
+
+        $response = $this->get('/wartung/install?token=geheimer-wert');
+
+        $response->assertOk();
+        $this->assertArrayHasKey('success', $response->json());
     }
 }

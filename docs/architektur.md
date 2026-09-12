@@ -196,7 +196,7 @@ bin/deploy-sftp.php        übernommen
 | Kontoübernahme | Argon2id-Hash, Ratenbegrenzung Login 5 je Minute je IP und Konto, optional 2FA, Sitzungsrotation, Secure-Cookies |
 | Schadhafte Uploads | Typprüfung über Inhalt, Neubenennung, Speicherung außerhalb Webroot, keine Ausführung, Größenlimit |
 | CSRF und Clickjacking | Laravel-CSRF, Sicherheitsheader global (CSP, frame-ancestors none, HSTS) |
-| Wartungsendpunkte | Nur POST mit eigenem Token je Endpunkt, GET liefert 405, Ratenbegrenzung |
+| Wartungsendpunkte | GET oder POST mit eigenem Token je Endpunkt (Kopfzeile oder ?token=), Aktionen idempotent, Ratenbegrenzung |
 | Falsche Client-IP hinter IONOS-Proxy | TRUSTED_PROXIES konfigurierbar, Standard für IONOS Webhosting `*` |
 
 ## 6. Betrieb auf IONOS Webhosting

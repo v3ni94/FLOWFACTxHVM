@@ -13,7 +13,9 @@ use Illuminate\Support\Facades\Artisan;
  * Wartungsendpunkt für Hosting ohne Shellzugang: löst "schedule:run" über
  * einen URL-Cronjob aus (docs/betrieb/installation.md).
  *
- * Nur POST, eigener Token je Endpunkt (config('deploy.cron_schedule_token')),
+ * GET oder POST, Token als Kopfzeile X-Cron-Token oder als Parameter
+ * ?token=, damit auch URL-Cronjobs und Browserlinks ohne Kopfzeilen
+ * funktionieren. Eigener Token je Endpunkt (config('deploy.cron_schedule_token')),
  * verglichen mit hash_equals. Ein leerer Token schaltet den Endpunkt ab.
  */
 class ScheduleController extends Controller
@@ -26,7 +28,7 @@ class ScheduleController extends Controller
             abort(404);
         }
 
-        $providedToken = (string) $request->header('X-Cron-Token', '');
+        $providedToken = (string) ($request->header('X-Cron-Token') ?: $request->query('token', ''));
 
         if ($providedToken === '' || ! hash_equals($configuredToken, $providedToken)) {
             abort(403, 'Ungültiger Token.');
