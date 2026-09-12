@@ -17,17 +17,12 @@ use Illuminate\Support\Collection;
 final class PortalSummary
 {
     /**
-     * @var array<string, string>
+     * Prüfbericht 2026-09-12, Befund 7: statt einer eigenen, unvollständigen
+     * Kurzlabel-Tabelle (die die drei neuen Portalstatus manuelle
+     * Freigabe erforderlich, Deaktivierung angefordert und Deaktivierung
+     * bestätigt nicht kannte und als rohen Enum-Wert anzeigte) wird
+     * durchgängig PortalStatus::label() verwendet.
      */
-    private const array KURZLABEL = [
-        'aktiv' => 'aktiv',
-        'angefordert' => 'ausstehend',
-        'fehler' => 'fehler',
-        'zurueckgezogen' => 'zurückgezogen',
-        'unbekannt' => 'unklar',
-        'nicht_veroeffentlicht' => 'nicht veröffentlicht',
-    ];
-
     public static function text(Listing $listing): string
     {
         /** @var Collection<int, ListingPortalPublication> $veroeffentlichungen */
@@ -39,7 +34,7 @@ final class PortalSummary
 
         $zusammenfassung = $veroeffentlichungen
             ->groupBy(fn ($p) => $p->status->value)
-            ->map(fn (Collection $gruppe, string $status): string => $gruppe->count().' '.(self::KURZLABEL[$status] ?? $status))
+            ->map(fn (Collection $gruppe, string $status): string => $gruppe->count().' '.PortalStatus::from($status)->label())
             ->values()
             ->implode(', ');
 
@@ -63,22 +58,23 @@ final class PortalSummary
             && $wert !== PortalStatus::NichtVeroeffentlicht);
     }
 
+    /**
+     * Prüfbericht 2026-09-12, Befund 7: die Rangfolge folgt weiterhin
+     * Fehler vor ausstehend/unklar vor aktiv vor neutral, aber gestützt auf
+     * PortalStatus::badgeClass() statt einer eigenen, unvollständigen Liste,
+     * damit auch die drei neuen Portalstatus (manuelle Freigabe
+     * erforderlich, Deaktivierung angefordert, Deaktivierung bestätigt)
+     * korrekt eingeordnet werden.
+     */
     public static function badgeClass(Listing $listing): string
     {
-        $status = $listing->portalPublications->map(fn ($p) => $p->status);
+        $badges = $listing->portalPublications->map(fn ($p) => $p->status->badgeClass());
 
-        if ($status->contains(PortalStatus::Fehler)) {
-            return 'badge-error';
-        }
-
-        if ($status->contains(PortalStatus::Angefordert) || $status->contains(PortalStatus::Unbekannt)) {
-            return 'badge-warning';
-        }
-
-        if ($status->contains(PortalStatus::Aktiv)) {
-            return 'badge-success';
-        }
-
-        return 'badge-neutral';
+        return match (true) {
+            $badges->contains('badge-error') => 'badge-error',
+            $badges->contains('badge-warning') => 'badge-warning',
+            $badges->contains('badge-success') => 'badge-success',
+            default => 'badge-neutral',
+        };
     }
 }

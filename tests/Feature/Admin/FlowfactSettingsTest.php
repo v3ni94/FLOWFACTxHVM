@@ -7,6 +7,7 @@ namespace Tests\Feature\Admin;
 use App\Domain\Settings\SettingsRepository;
 use App\Enums\UserRole;
 use App\Flowfact\Mapping\FieldMappingResolver;
+use App\Flowfact\Sync\ListingSyncService;
 use App\Models\TransferLog;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -183,6 +184,64 @@ final class FlowfactSettingsTest extends TestCase
         self::assertSame('company-1', $this->settings()->get('flowfact.company_id'));
         self::assertSame('wohnung_miete', $this->settings()->get('flowfact.schema_miete'));
         self::assertNull($this->settings()->get('flowfact.schema_kauf'));
+    }
+
+    /**
+     * Prüfbericht 2026-09-12, Befund 14: Konfliktverhalten und Löschsemantik
+     * sind im Adminbereich einstellbar, nicht nur per Datenbank.
+     */
+    public function test_konfliktverhalten_und_loeschsemantik_sind_im_adminbereich_einstellbar(): void
+    {
+        $admin = $this->admin();
+
+        $seite = $this->actingAs($admin)->get('/admin/flowfact');
+        $seite->assertOk();
+        $seite->assertSee('Konfliktverhalten');
+        $seite->assertSee('Geleerte Felder in FLOWFACT löschen');
+        $seite->assertSee('name="konfliktverhalten"', false);
+        $seite->assertSee('name="leere_felder_loeschen"', false);
+
+        $this->actingAs($admin)->post('/admin/flowfact/einstellungen', [
+            'company_id' => '',
+            'schema_miete' => 'wohnung_miete',
+            'schema_kauf' => '',
+            'konfliktverhalten' => 'ueberschreiben',
+            'leere_felder_loeschen' => 'aus',
+        ])->assertRedirect(route('admin.flowfact.edit'))->assertSessionHas('status');
+
+        self::assertSame('ueberschreiben', $this->settings()->get(ListingSyncService::KONFLIKTVERHALTEN));
+        self::assertFalse($this->settings()->get(ListingSyncService::LEERE_FELDER_LOESCHEN));
+        self::assertSame(ListingSyncService::KONFLIKT_UEBERSCHREIBEN, app(ListingSyncService::class)->konfliktverhalten());
+        self::assertFalse(app(ListingSyncService::class)->leereFelderLoeschen());
+
+        $seite = $this->actingAs($admin)->get('/admin/flowfact');
+        $seite->assertSee('value="ueberschreiben" selected', false);
+        $seite->assertSee('value="aus" selected', false);
+
+        $this->actingAs($admin)->post('/admin/flowfact/einstellungen', [
+            'schema_miete' => 'wohnung_miete',
+            'konfliktverhalten' => 'abbrechen',
+            'leere_felder_loeschen' => 'an',
+        ])->assertRedirect(route('admin.flowfact.edit'));
+
+        self::assertSame('abbrechen', $this->settings()->get(ListingSyncService::KONFLIKTVERHALTEN));
+        self::assertTrue($this->settings()->get(ListingSyncService::LEERE_FELDER_LOESCHEN));
+        self::assertSame(ListingSyncService::KONFLIKT_ABBRECHEN, app(ListingSyncService::class)->konfliktverhalten());
+        self::assertTrue(app(ListingSyncService::class)->leereFelderLoeschen());
+    }
+
+    public function test_ungueltige_werte_fuer_konfliktverhalten_und_loeschsemantik_werden_abgewiesen(): void
+    {
+        $this->settings()->set(ListingSyncService::KONFLIKTVERHALTEN, 'abbrechen');
+
+        $this->actingAs($this->admin())
+            ->from('/admin/flowfact')
+            ->post('/admin/flowfact/einstellungen', ['konfliktverhalten' => 'ignorieren', 'leere_felder_loeschen' => 'vielleicht'])
+            ->assertRedirect('/admin/flowfact')
+            ->assertSessionHasErrors(['konfliktverhalten', 'leere_felder_loeschen']);
+
+        self::assertSame('abbrechen', $this->settings()->get(ListingSyncService::KONFLIKTVERHALTEN));
+        self::assertNull($this->settings()->get(ListingSyncService::LEERE_FELDER_LOESCHEN));
     }
 
     public function test_schemata_laden_speichert_liste_und_cache(): void

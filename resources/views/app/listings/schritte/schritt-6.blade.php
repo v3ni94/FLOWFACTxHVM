@@ -5,6 +5,12 @@
 @section('content')
     @include('app.listings.schritte._header')
 
+    @if ($adressLeckMedien !== [])
+        <div class="alert alert-error">
+            Die Adressfreigabe erlaubt nur PLZ und Ort, folgende Bildtitel enthalten dennoch Straße oder Hausnummer und blockieren die Veröffentlichung: {{ implode(', ', $adressLeckMedien) }}.
+        </div>
+    @endif
+
     <div class="card">
         <div class="card-body">
             <div class="tab-nav" data-tabs role="tablist">
@@ -47,12 +53,12 @@
 
                                         @if (in_array($medium->mime, ['image/jpeg', 'image/png', 'image/webp'], true))
                                             <img
-                                                src="{{ route('app.media.show', ['media' => $medium, 'variante' => 'vorschau']) }}"
+                                                src="{{ URL::temporarySignedRoute('app.media.show', now()->addMinutes(30), ['media' => $medium->id, 'variante' => 'vorschau']) }}"
                                                 alt="{{ $medium->titel ?? $medium->dateiname_original }}"
                                                 class="@if ($medium->rotation) rot-{{ $medium->rotation }} @endif"
                                             >
                                         @else
-                                            <a href="{{ route('app.media.show', ['media' => $medium, 'variante' => 'original']) }}" class="btn btn-ghost btn-sm">{{ $medium->dateiname_original }}</a>
+                                            <a href="{{ URL::temporarySignedRoute('app.media.show', now()->addMinutes(30), ['media' => $medium->id, 'variante' => 'original']) }}" class="btn btn-ghost btn-sm">{{ $medium->dateiname_original }}</a>
                                         @endif
 
                                         <input type="hidden" name="reihenfolge[{{ $medium->id }}]" value="{{ $medium->sortierung }}" data-order-input>

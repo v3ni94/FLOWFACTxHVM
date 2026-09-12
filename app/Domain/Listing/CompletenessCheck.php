@@ -4,11 +4,13 @@ declare(strict_types=1);
 
 namespace App\Domain\Listing;
 
+use App\Enums\AdressFreigabe;
 use App\Enums\MediaTyp;
 use App\Enums\MerkmalWert;
 use App\Enums\Nutzungsstatus;
 use App\Enums\Objektart;
 use App\Enums\ProvisionTyp;
+use App\Enums\PruefEbene;
 use App\Enums\StellplatzModus;
 use App\Enums\VerfuegbarAbTyp;
 use App\Enums\Vermarktungsart;
@@ -287,6 +289,49 @@ final class CompletenessCheck
         if (! $hatBild) {
             $befunde[] = Befund::blockierend('medien.bild', 'Mindestens ein Bild für das Inserat', 6, 'Es fehlt mindestens ein freigegebenes Bild für das Inserat.');
         }
+
+        // Prüfbericht 2026-09-12, Befund 4: Bildtitel veröffentlichbarer
+        // Medien müssen ebenso auf die Adresse geprüft werden wie die Texte,
+        // sonst erreicht die ausgeblendete Adresse FLOWFACT und die Portale
+        // über die Bildbeschriftung.
+        if ($listing->adress_freigabe === AdressFreigabe::NurPlzOrt) {
+            foreach ($listing->media as $medium) {
+                if ($medium->istVeroeffentlichbar() && $this->titelEnthaeltAdresse($listing, $medium->titel)) {
+                    $befunde[] = Befund::blockierend(
+                        'medien.titel',
+                        'Bildtitel',
+                        6,
+                        'Der Bildtitel "'.$medium->titel.'" enthält Straße oder Hausnummer, obwohl die Adressfreigabe nur PLZ und Ort erlaubt.',
+                        PruefEbene::Portal,
+                    );
+                }
+            }
+        }
+    }
+
+    /**
+     * Adressprüfung eines Medientitels, spiegelbildlich zu
+     * App\Http\Controllers\App\Support\ListingPreviewBuilder::enthaeltAdresse
+     * (Masterprompt-Abgleich B.7). Bewusst als eigene Domänenfunktion ohne
+     * Abhängigkeit auf die HTTP-Schicht gehalten.
+     */
+    private function titelEnthaeltAdresse(Listing $listing, ?string $titel): bool
+    {
+        if ($titel === null || trim($titel) === '') {
+            return false;
+        }
+
+        $normalisiere = static fn (string $text): string => mb_strtolower(trim(preg_replace('/\s+/u', ' ', $text) ?? $text));
+
+        $normalisiert = $normalisiere($titel);
+        $strasse = $normalisiere((string) $listing->strasse);
+        $hausnummer = trim((string) $listing->hausnummer);
+
+        if ($strasse !== '' && str_contains($normalisiert, $strasse)) {
+            return true;
+        }
+
+        return $hausnummer !== '' && preg_match('/(?<![\p{L}\d])'.preg_quote($hausnummer, '/').'(?![\p{L}\d])/u', $titel) === 1;
     }
 
     /**

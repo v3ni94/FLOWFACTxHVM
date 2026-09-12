@@ -113,4 +113,54 @@ final class TextGenerationTest extends TestCase
             'uebernommen' => false,
         ]);
     }
+
+    /**
+     * Prüfbericht 2026-09-12, Befund 12: ein zu langer Titelvorschlag (die
+     * Spalte ist string(100)) darf nicht ungeprüft übernommen werden, sonst
+     * scheitert das nächste manuelle Speichern unter MariaDB im strict mode
+     * mit einem SQL-Fehler.
+     */
+    public function test_ein_zu_langer_titelvorschlag_wird_nicht_uebernommen(): void
+    {
+        $user = User::factory()->create();
+        $listing = Listing::factory()->create(['titel' => 'Alter Titel']);
+        $langerTitel = str_repeat('Sehr lange Überschrift ', 8);
+        self::assertGreaterThan(100, mb_strlen($langerTitel));
+
+        $vorschlag = ListingText::factory()->ki()->create([
+            'listing_id' => $listing->id,
+            'feld' => TextFeld::Titel,
+            'inhalt' => $langerTitel,
+            'uebernommen' => false,
+        ]);
+
+        $response = $this->actingAs($user)->post(route('app.listings.texts.accept', ['listing' => $listing, 'text' => $vorschlag]));
+
+        $response->assertRedirect();
+        $response->assertSessionHas('error');
+
+        $listing->refresh();
+        self::assertSame('Alter Titel', $listing->titel);
+        self::assertFalse($vorschlag->fresh()->uebernommen);
+    }
+
+    /**
+     * Prüfbericht 2026-09-12, Befund 12: eine Überarbeitung des Titels darf
+     * keinen Text über 100 Zeichen als Ausgangstext annehmen.
+     */
+    public function test_eine_ueberarbeitung_des_titels_ueber_100_zeichen_wird_abgelehnt(): void
+    {
+        $user = User::factory()->create();
+        $listing = Listing::factory()->create(['titel' => 'Kurzer Titel']);
+        $langerTitel = str_repeat('Sehr lange Überschrift ', 8);
+
+        $response = $this->actingAs($user)->post(route('app.listings.texts.revise', $listing), [
+            'feld' => TextFeld::Titel->value,
+            'text' => $langerTitel,
+            'anweisung' => 'kuerzer',
+        ]);
+
+        $response->assertSessionHasErrors('text');
+        self::assertSame(0, ListingText::query()->where('listing_id', $listing->id)->count());
+    }
 }

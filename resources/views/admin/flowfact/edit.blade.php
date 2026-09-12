@@ -125,6 +125,34 @@
                             @enderror
                         </div>
                     </div>
+
+                    <p class="eyebrow">Übertragungsverhalten</p>
+                    <div class="grid grid-2">
+                        <div class="field @error('konfliktverhalten') has-error @enderror">
+                            <label for="konfliktverhalten">Konfliktverhalten</label>
+                            <select id="konfliktverhalten" name="konfliktverhalten">
+                                <option value="{{ \App\Flowfact\Sync\ListingSyncService::KONFLIKT_ABBRECHEN }}" @selected(old('konfliktverhalten', $konfliktverhalten) === \App\Flowfact\Sync\ListingSyncService::KONFLIKT_ABBRECHEN)>Abbrechen (Standard): Übertragung endet mit Fehler, wenn das Objekt in FLOWFACT seit der letzten Übertragung geändert wurde</option>
+                                <option value="{{ \App\Flowfact\Sync\ListingSyncService::KONFLIKT_UEBERSCHREIBEN }}" @selected(old('konfliktverhalten', $konfliktverhalten) === \App\Flowfact\Sync\ListingSyncService::KONFLIKT_UEBERSCHREIBEN)>Überschreiben: zugeordnete Felder werden mit Warnung überschrieben</option>
+                            </select>
+                            <p class="hint">Müller FLOW führt die zugeordneten Felder, FLOWFACT alles andere. Bei einem Konflikt wurde die Entität in FLOWFACT seit der letzten Übertragung geändert.</p>
+                            @error('konfliktverhalten')
+                                <p class="error">{{ $message }}</p>
+                            @enderror
+                        </div>
+
+                        <div class="field @error('leere_felder_loeschen') has-error @enderror">
+                            <label for="leere_felder_loeschen">Geleerte Felder in FLOWFACT löschen</label>
+                            <select id="leere_felder_loeschen" name="leere_felder_loeschen">
+                                <option value="{{ \App\Http\Controllers\Admin\FlowfactSettingsController::LEERE_FELDER_AN }}" @selected(old('leere_felder_loeschen', $leereFelderLoeschen) === \App\Http\Controllers\Admin\FlowfactSettingsController::LEERE_FELDER_AN)>An (Standard): zuvor gesendete, jetzt leere Felder werden in FLOWFACT geleert</option>
+                                <option value="{{ \App\Http\Controllers\Admin\FlowfactSettingsController::LEERE_FELDER_AUS }}" @selected(old('leere_felder_loeschen', $leereFelderLoeschen) === \App\Http\Controllers\Admin\FlowfactSettingsController::LEERE_FELDER_AUS)>Aus: leere Felder bleiben in FLOWFACT unverändert</option>
+                            </select>
+                            <p class="hint">Betrifft nur Felder, die Müller FLOW selbst gesendet hat. Ausschalten, falls das Konto die leere Werteliste anders auswertet.</p>
+                            @error('leere_felder_loeschen')
+                                <p class="error">{{ $message }}</p>
+                            @enderror
+                        </div>
+                    </div>
+
                     <div class="cluster">
                         <button type="submit" class="btn btn-primary">Einstellungen speichern</button>
                     </div>

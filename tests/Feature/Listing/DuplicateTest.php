@@ -95,6 +95,46 @@ final class DuplicateTest extends TestCase
         $this->assertNull($kopieMedium->flowfact_multimedia_id);
     }
 
+    /**
+     * Prüfbericht 2026-09-12, Befund 15: das Duplikat muss die
+     * Vorschaudatei mitkopieren (sonst zeigen Übersicht und Schritt 6 für
+     * das Duplikat das Original in voller Größe) und enthaelt_standortdaten
+     * übernehmen (sonst geht der GPS-Hinweis am Duplikat verloren).
+     */
+    public function test_das_duplikat_kopiert_die_vorschau_und_den_standortdaten_hinweis(): void
+    {
+        Storage::fake('media');
+
+        $user = User::factory()->create();
+        $original = Listing::factory()->create();
+
+        Storage::disk('media')->put('listings/'.$original->uuid.'/bild.jpg', 'inhalt-der-datei');
+        Storage::disk('media')->put('listings/'.$original->uuid.'/bild_vorschau.jpg', 'inhalt-der-vorschau');
+
+        ListingMedia::factory()->for($original)->create([
+            'pfad' => 'listings/'.$original->uuid.'/bild.jpg',
+            'mime' => 'image/jpeg',
+            'pruefsumme_sha256' => hash('sha256', 'inhalt-der-datei'),
+            'enthaelt_standortdaten' => true,
+        ]);
+
+        $this->actingAs($user)->post(route('app.listings.duplicate', $original));
+
+        $kopie = Listing::query()->where('id', '!=', $original->id)->latest('id')->first();
+        $kopieMedium = $kopie->media()->first();
+
+        $this->assertNotNull($kopieMedium);
+        $this->assertTrue($kopieMedium->enthaelt_standortdaten, 'enthaelt_standortdaten muss übernommen werden.');
+
+        $vorschauPfad = pathinfo($kopieMedium->pfad, PATHINFO_DIRNAME).'/'.pathinfo($kopieMedium->pfad, PATHINFO_FILENAME).'_vorschau.jpg';
+        $this->assertTrue(Storage::disk('media')->exists($vorschauPfad), 'Die Vorschau des Duplikats fehlt.');
+        $this->assertSame('inhalt-der-vorschau', Storage::disk('media')->get($vorschauPfad));
+
+        // Original und Duplikat bleiben unabhängige Dateien.
+        Storage::disk('media')->delete($kopieMedium->pfad);
+        $this->assertTrue(Storage::disk('media')->exists('listings/'.$original->uuid.'/bild.jpg'));
+    }
+
     public function test_ein_leser_darf_nicht_duplizieren(): void
     {
         $leser = User::factory()->leser()->create();

@@ -19,6 +19,9 @@ final readonly class MappedPayload
      *                                     Freigabe tatsächlich gesendet wurden (Masterprompt Abschnitt 23).
      * @param  string|null  $blockiert  Grund, weshalb der Payload nicht übertragen werden darf (z. B. Objektart
      *                                  Stellplatz ohne FLOWFACT-Code); null, wenn die Übertragung möglich ist
+     * @param  array<string, string>  $zuordnung  eigenes Feld => FLOWFACT-Feld für jedes mit Wert gesendete Feld
+     *                                            (Prüfbericht 2026-09-12, Befund 5: wird je Übertragung gespeichert)
+     * @param  list<string>  $leereQuellen  eigene Feldnamen zugeordneter Felder, deren Wert leer ist
      */
     public function __construct(
         public array $fields,
@@ -26,6 +29,8 @@ final readonly class MappedPayload
         public bool $showAddress = true,
         public array $leereFelder = [],
         public ?string $blockiert = null,
+        public array $zuordnung = [],
+        public array $leereQuellen = [],
     ) {}
 
     /**
@@ -56,12 +61,63 @@ final readonly class MappedPayload
      */
     public function loeschungenBeschraenktAuf(array $vorherGesendeteFelder): self
     {
+        return $this->mitLeerenFeldern(array_values(array_intersect($this->leereFelder, $vorherGesendeteFelder)));
+    }
+
+    /**
+     * Löschliste aus der tatsächlich gesendeten Zuordnung der letzten
+     * Übertragung (Prüfbericht 2026-09-12, Befund 5). Geleert wird ein
+     * FLOWFACT-Feld nur, wenn Müller FLOW es zuvor selbst mit Wert gesendet
+     * hat und
+     * - es in der aktuellen Freigabe leer ist (gleiche Zuordnung), oder
+     * - sein eigenes Feld jetzt leer ist, auch wenn die Zuordnung inzwischen
+     *   auf ein anderes Zielfeld zeigt (das neue Zielfeld wurde nie gesendet
+     *   und erhält keine leere Werteliste), oder
+     * - sein eigenes Feld jetzt mit Wert an ein anderes Zielfeld geht (der
+     *   alte Wert bliebe sonst veraltet im alten Feld stehen).
+     * Ein abgeschaltetes Feld (keine Zuordnung mehr) wird nie geleert.
+     * Zielfelder, die aktuell mit Wert gesendet werden, stehen nie in der
+     * Löschliste.
+     *
+     * @param  array<string, string>  $vorherigeZuordnung  eigenes Feld => FLOWFACT-Feld der letzten Übertragung
+     * @param  list<string>  $vorherGesendeteFelder  FLOWFACT-Feldnamen der letzten Übertragung (auch ohne Zuordnung bekannt)
+     */
+    public function loeschungenAus(array $vorherigeZuordnung, array $vorherGesendeteFelder): self
+    {
+        $loeschungen = array_intersect($this->leereFelder, $vorherGesendeteFelder);
+
+        foreach ($vorherigeZuordnung as $quelle => $altesZiel) {
+            $quelle = (string) $quelle;
+            $altesZiel = (string) $altesZiel;
+
+            if (array_key_exists($altesZiel, $this->fields)) {
+                continue;
+            }
+
+            $jetztLeer = in_array($quelle, $this->leereQuellen, true);
+            $verschoben = array_key_exists($quelle, $this->zuordnung) && $this->zuordnung[$quelle] !== $altesZiel;
+
+            if ($jetztLeer || $verschoben) {
+                $loeschungen[] = $altesZiel;
+            }
+        }
+
+        return $this->mitLeerenFeldern(array_values(array_unique($loeschungen)));
+    }
+
+    /**
+     * @param  list<string>  $leereFelder
+     */
+    private function mitLeerenFeldern(array $leereFelder): self
+    {
         return new self(
             fields: $this->fields,
             warnungen: $this->warnungen,
             showAddress: $this->showAddress,
-            leereFelder: array_values(array_intersect($this->leereFelder, $vorherGesendeteFelder)),
+            leereFelder: $leereFelder,
             blockiert: $this->blockiert,
+            zuordnung: $this->zuordnung,
+            leereQuellen: $this->leereQuellen,
         );
     }
 
@@ -73,5 +129,44 @@ final readonly class MappedPayload
     public function gesendeteFelder(): array
     {
         return array_keys($this->fields);
+    }
+
+    /**
+     * Entitätsstatus überschreiben (Prüfbericht 2026-09-12, Befund 10): ohne
+     * Veröffentlichungsrecht wird die Entität inaktiv gesendet, mit Warnung.
+     */
+    public function mitStatus(string $status, ?string $warnung = null): self
+    {
+        $fields = $this->fields;
+        $fields['status'] = ['values' => [$status]];
+
+        $warnungen = $this->warnungen;
+
+        if ($warnung !== null && ! in_array($warnung, $warnungen, true)) {
+            $warnungen[] = $warnung;
+        }
+
+        $zuordnung = $this->zuordnung;
+        $zuordnung['status'] = 'status';
+
+        return new self(
+            fields: $fields,
+            warnungen: $warnungen,
+            showAddress: $this->showAddress,
+            leereFelder: $this->leereFelder,
+            blockiert: $this->blockiert,
+            zuordnung: $zuordnung,
+            leereQuellen: $this->leereQuellen,
+        );
+    }
+
+    /**
+     * Gesendeter Entitätsstatus (active, inactive).
+     */
+    public function status(): ?string
+    {
+        $wert = $this->fields['status']['values'][0] ?? null;
+
+        return is_string($wert) ? $wert : null;
     }
 }

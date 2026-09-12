@@ -62,6 +62,19 @@ use Throwable;
  *   die bestandene Vollständigkeitsprüfung voraus.
  * - Befund 7: Lease mit Token, Freigabe nur der eigenen Lease, Herzschlag
  *   nach jedem Bildupload.
+ *
+ * Nach Prüfbericht 2026-09-12:
+ * - Befund 5: Die mit einer Übertragung tatsächlich gesendeten Zielfeldnamen
+ *   werden am Link und an der Freigabeversion gespeichert
+ *   (gesendete_felder_json). Die Löschliste des nächsten PATCH entsteht aus
+ *   diesen Namen; eine zwischenzeitlich geänderte Feldzuordnung kann so
+ *   weder ein nie gesendetes Zielfeld leeren noch das alte Zielfeld mit
+ *   veraltetem Wert stehen lassen.
+ * - Befund 10: Fehlt dem handelnden Benutzer das Veröffentlichungsrecht oder
+ *   handelt kein Benutzer, wird die Entität mit status inactive gesendet und
+ *   eine Warnung ausgegeben. Der gesendete Status steht im Link
+ *   (flowfact_status); ein Wechsel des Status gilt als Inhaltsänderung, damit
+ *   die Veröffentlichung durch einen Berechtigten die Entität aktiviert.
  */
 final class ListingSyncService
 {
@@ -86,6 +99,8 @@ final class ListingSyncService
     public const string WARNUNG_KONFLIKT_UEBERSCHRIEBEN = 'In FLOWFACT wurde das Objekt seit der letzten Übertragung geändert (%s). Die zugeordneten Felder wurden gemäß Einstellung überschrieben.';
 
     public const string WARNUNG_KEIN_ZEITSTEMPEL = 'FLOWFACT hat keinen Änderungszeitpunkt geliefert; die Konflikterkennung ist beim nächsten Lauf nicht möglich.';
+
+    public const string WARNUNG_INAKTIV_ANGELEGT = 'Entität inaktiv angelegt, da kein Veröffentlichungsrecht';
 
     /**
      * Einstellung (Standard true): geleerte Felder beim PATCH mit leerer
@@ -189,11 +204,18 @@ final class ListingSyncService
 
             $entityId = $gefunden['id'];
             $remoteLastModified = $gefunden['lastModified'];
+
+            // Befund 10: Entitätsstatus nach Veröffentlichungsrecht, erst jetzt
+            // bekannt, ob eine Entität angelegt oder aktualisiert wird.
+            $payload = $this->mitEntitaetsstatus($payload, $user, $link, $entityId === null);
             $warnungen = $payload->warnungen;
 
             // Schritt 6: Anlegen oder Aktualisieren
             $angelegt = false;
-            $inhaltGeaendert = $force || (int) ($link->release_id ?? 0) !== (int) $release->getKey() || $link->uebertragener_inhalt_hash !== $release->inhalt_hash;
+            $inhaltGeaendert = $force
+                || (int) ($link->release_id ?? 0) !== (int) $release->getKey()
+                || $link->uebertragener_inhalt_hash !== $release->inhalt_hash
+                || $this->statusGeaendert($link, $payload);
 
             if ($entityId === null) {
                 $ergebnis = $entities->createMitMetadaten($schema, $payload->fields);
@@ -203,6 +225,7 @@ final class ListingSyncService
                 $link->flowfact_entity_id = $entityId;
                 $link->flowfact_schema = $schema;
                 $link->flowfact_last_modified = $ergebnis['lastModified'];
+                $this->merkeGesendet($link, $release, $payload);
                 $link->save();
                 $angelegt = true;
                 $inhaltGeaendert = true;
@@ -223,7 +246,7 @@ final class ListingSyncService
                 }
 
                 $patchPayload = $this->leereFelderLoeschen()
-                    ? $payload->loeschungenBeschraenktAuf($this->vorherGesendeteFelder($listing, $link, $release))
+                    ? $this->mitLoeschungen($payload, $listing, $link, $release)
                     : $payload;
 
                 $antwort = $entities->patch($schema, $entityId, $this->leereFelderLoeschen() ? $patchPayload->fieldsMitLoeschungen() : $patchPayload->fields);
@@ -237,6 +260,7 @@ final class ListingSyncService
                 }
 
                 $link->flowfact_last_modified = $lastModified;
+                $this->merkeGesendet($link, $release, $payload);
                 $link->save();
 
                 if ($lastModified === null) {
@@ -358,7 +382,7 @@ final class ListingSyncService
         return is_string($schema) && trim($schema) !== '' ? trim($schema) : null;
     }
 
-    private function leereFelderLoeschen(): bool
+    public function leereFelderLoeschen(): bool
     {
         $wert = $this->settings->get(self::LEERE_FELDER_LOESCHEN, true);
 
@@ -416,11 +440,19 @@ final class ListingSyncService
 
     /**
      * Zuletzt übertragene Version (link.release_id), ersatzweise die
-     * Vorgängerversion der aktuellen Freigabe.
+     * Vorgängerversion der aktuellen Freigabe. Ist der Link bereits auf der
+     * aktuellen Version (erneuter Lauf derselben Freigabe, z. B. nach einer
+     * vorgemerkten Löschung), ist die aktuelle Version selbst der zuletzt
+     * übertragene Stand; sonst würde eine ältere Version eine nie erfolgte
+     * Drehung vortäuschen und Bilder löschen und erneut hochladen.
      */
     private function vorherigeVersion(Listing $listing, ListingFlowfactLink $link, ListingRelease $aktuell): ?ListingRelease
     {
-        if ($link->release_id !== null && (int) $link->release_id !== (int) $aktuell->getKey()) {
+        if ($link->release_id !== null) {
+            if ((int) $link->release_id === (int) $aktuell->getKey()) {
+                return $aktuell;
+            }
+
             $release = ListingRelease::query()->whereKey($link->release_id)->first();
 
             if ($release !== null) {
@@ -435,20 +467,85 @@ final class ListingSyncService
     }
 
     /**
-     * FLOWFACT-Feldnamen, die mit der zuletzt übertragenen Version gesendet
-     * wurden. Nur diese dürfen geleert werden (Masterprompt Abschnitt 23).
-     *
-     * @return list<string>
+     * Löschliste für den PATCH (Masterprompt Abschnitt 23, Prüfbericht
+     * 2026-09-12, Befund 5): Quelle ist die gespeicherte Zuordnung der
+     * letzten Übertragung am Link (gesendete_felder_json), ersatzweise die an
+     * der zuletzt übertragenen Version. Nur für Zeilen aus der Zeit vor dieser
+     * Spalte wird die Vorgängerversion mit der aktuellen Zuordnung erneut
+     * gemappt (dann nur Namen, keine Zuordnung).
      */
-    private function vorherGesendeteFelder(Listing $listing, ListingFlowfactLink $link, ListingRelease $aktuell): array
+    private function mitLoeschungen(MappedPayload $payload, Listing $listing, ListingFlowfactLink $link, ListingRelease $aktuell): MappedPayload
     {
+        if ($link->gesendeteFelder() !== null) {
+            return $payload->loeschungenAus($link->gesendeteZuordnung(), $link->gesendeteFelder());
+        }
+
         $vorherige = $this->vorherigeVersion($listing, $link, $aktuell);
 
         if ($vorherige === null) {
-            return [];
+            return $payload->loeschungenAus([], []);
         }
 
-        return $this->mapper->mapSnapshot($vorherige->snapshot())->gesendeteFelder();
+        if ($vorherige->gesendeteFelder() !== null) {
+            return $payload->loeschungenAus($vorherige->gesendeteZuordnung(), $vorherige->gesendeteFelder());
+        }
+
+        return $payload->loeschungenAus([], $this->mapper->mapSnapshot($vorherige->snapshot())->gesendeteFelder());
+    }
+
+    /**
+     * Nach erfolgreichem Anlegen oder PATCH: gesendete Zielfeldnamen und
+     * Entitätsstatus am Link merken (Befund 5 und 10), die Namen zusätzlich an
+     * der übertragenen Version. Der Aufrufer speichert den Link.
+     */
+    private function merkeGesendet(ListingFlowfactLink $link, ListingRelease $release, MappedPayload $payload): void
+    {
+        // Gespeichert wird eigenes Feld => FLOWFACT-Feld; die Werte sind die
+        // gesendeten Zielfeldnamen.
+        $zuordnung = $payload->zuordnung;
+
+        $link->gesendete_felder_json = $zuordnung;
+        $link->flowfact_status = $payload->status();
+
+        $release->gesendete_felder_json = $zuordnung;
+        $release->saveQuietly();
+    }
+
+    /**
+     * Prüfbericht 2026-09-12, Befund 10: ohne Veröffentlichungsrecht (oder
+     * ohne handelnden Benutzer) wird eine neue Entität inaktiv angelegt; eine
+     * zuvor inaktiv gesendete bleibt inaktiv. Eine bereits aktiv gesendete
+     * oder in FLOWFACT vorgefundene Entität wird ohne Recht nicht
+     * deaktiviert: das Abschalten ist ebenso eine Veröffentlichungshandlung
+     * wie das Aktivieren und bleibt Berechtigten vorbehalten.
+     */
+    private function mitEntitaetsstatus(MappedPayload $payload, ?User $user, ListingFlowfactLink $link, bool $wirdAngelegt): MappedPayload
+    {
+        if ($user !== null && $user->kannVeroeffentlichen()) {
+            return $payload;
+        }
+
+        if (! $wirdAngelegt && ! $link->inaktivGesendet()) {
+            return $payload;
+        }
+
+        return $payload->mitStatus(ListingFlowfactLink::STATUS_INAKTIV, self::WARNUNG_INAKTIV_ANGELEGT);
+    }
+
+    /**
+     * Ein Wechsel des gesendeten Entitätsstatus zählt als Inhaltsänderung,
+     * damit eine inaktiv angelegte Entität vor der Veröffentlichung aktiviert
+     * wird. Ältere Links ohne Wert wurden immer aktiv gesendet.
+     */
+    private function statusGeaendert(ListingFlowfactLink $link, MappedPayload $payload): bool
+    {
+        if ($link->flowfact_entity_id === null) {
+            return false;
+        }
+
+        $gesendet = $link->flowfact_status ?? ListingFlowfactLink::STATUS_AKTIV;
+
+        return $gesendet !== ($payload->status() ?? ListingFlowfactLink::STATUS_AKTIV);
     }
 
     /**

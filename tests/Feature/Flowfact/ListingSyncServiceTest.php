@@ -14,6 +14,7 @@ use App\Flowfact\Sync\SyncLease;
 use App\Models\Listing;
 use App\Models\ListingFlowfactLink;
 use App\Models\TransferLog;
+use App\Models\User;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
@@ -90,7 +91,9 @@ final class ListingSyncServiceTest extends FlowfactTestCase
         $fake = $this->fakeOhneTreffer('ent-neu');
         $listing = $this->listingOhneBilder();
 
-        $ergebnis = $this->service()->sync($listing);
+        // Prüfbericht 2026-09-12, Befund 10: status active setzt einen Benutzer
+        // mit Veröffentlichungsrecht voraus (Regression 18 prüft inactive).
+        $ergebnis = $this->service()->sync($listing, User::factory()->create(['darf_veroeffentlichen' => true]));
 
         self::assertTrue($ergebnis->ok, $ergebnis->meldung);
         self::assertSame('ent-neu', $ergebnis->entityId);

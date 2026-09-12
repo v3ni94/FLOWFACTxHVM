@@ -9,9 +9,11 @@ use App\Domain\Listing\IllegalStatusTransitionException;
 use App\Domain\Listing\ListingStatusMachine;
 use App\Domain\Listing\ReleaseService;
 use App\Domain\Settings\SettingsRepository;
+use App\Enums\EnergieausweisStatus;
 use App\Enums\ListingStatus;
 use App\Enums\PortalStatus;
 use App\Enums\ReleaseAktion;
+use App\Flowfact\Sync\NullPublishingService;
 use App\Flowfact\Sync\PublishingService;
 use App\Http\Controllers\App\Support\ListingPreviewBuilder;
 use App\Http\Controllers\App\Support\PortalSummary;
@@ -20,9 +22,11 @@ use App\Http\Requests\Listing\ReviewEnergyExceptionRequest;
 use App\Http\Requests\Listing\ReviewPublishRequest;
 use App\Http\Requests\Listing\ReviewWithdrawRequest;
 use App\Models\Listing;
+use App\Models\ListingEnergy;
 use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\View\View;
 
 /**
@@ -89,15 +93,57 @@ class ReviewController extends Controller
 
     public function transfer(Request $request, Listing $listing, PublishingService $publishingService): RedirectResponse
     {
-        $this->authorize('update', $listing);
+        // Prüfbericht 2026-09-12, Befund 10: "In FLOWFACT speichern" legt die
+        // Entität mit status active an (FlowfactPayloadMapper) und kann sie
+        // damit sichtbar machen, auch ohne dass jemand ausdrücklich
+        // veröffentlicht hat. Der Weg in das führende System ist deshalb an
+        // dasselbe Recht gebunden wie die Veröffentlichung selbst.
+        $this->authorize('publish', $listing);
+
+        // Prüfbericht 2026-09-12, Befund 8: Status und Konfiguration vor der
+        // Freigabe prüfen, sonst entsteht eine Freigabeversion, obwohl
+        // nichts übertragen werden kann (Entwurf, kein FLOWFACT-Token), und
+        // der Indikator "Unveröffentlichte Änderungen" meldet fälschlich
+        // nichts mehr offen.
+        if (! in_array($listing->status, [ListingStatus::Bereit, ListingStatus::Veroeffentlicht, ListingStatus::Zurueckgezogen], true)) {
+            return back()->with('error', 'Nur Objekte im Status bereit, veröffentlicht oder zurückgezogen werden an FLOWFACT übertragen. Entwürfe und archivierte Objekte sind ausgeschlossen.');
+        }
+
+        if (! $publishingService->isConfigured()) {
+            return back()->with('error', NullPublishingService::MELDUNG);
+        }
 
         if (app(CompletenessCheck::class)->blockiert($listing)) {
             return back()->with('error', 'Das Objekt kann nicht in FLOWFACT gespeichert werden, solange blockierende Prüfpunkte offen sind.');
         }
 
-        app(ReleaseService::class)->freigeben($listing, $request->user(), ReleaseAktion::FlowfactSpeichern, []);
+        $releaseService = app(ReleaseService::class);
 
-        $ergebnis = $publishingService->transfer($listing, $request->user());
+        // Wartet noch eine Veröffentlichung auf der aktuellen Freigabe (z. B.
+        // Fortsetzung nach Zeitlimit beim Bildupload), übernimmt die neue
+        // Freigabe deren Portale, damit "In FLOWFACT speichern" die Absicht
+        // "anschließend veröffentlichen" nicht stillschweigend verwirft.
+        $vorherigeFreigabe = $releaseService->latest($listing);
+        $uebernommenePortale = $vorherigeFreigabe !== null
+            && $vorherigeFreigabe->aktion === ReleaseAktion::Veroeffentlichen
+            && $vorherigeFreigabe->portalIds() !== []
+                ? $vorherigeFreigabe->portalIds()
+                : [];
+
+        [$release, $ergebnis] = DB::transaction(function () use ($listing, $request, $publishingService, $releaseService, $uebernommenePortale): array {
+            $release = $releaseService->freigeben($listing, $request->user(), ReleaseAktion::FlowfactSpeichern, $uebernommenePortale);
+            $ergebnis = $publishingService->transfer($listing, $request->user());
+
+            // Kein API-Aufruf hat FLOWFACT tatsächlich erreicht (Status- oder
+            // Konfigurationsfehler): die soeben angelegte Freigabeversion
+            // verwerfen, damit ein wartender Fortsetzungsjob der vorherigen
+            // Freigabe nicht als veraltet gilt.
+            if (! $ergebnis->ok && $ergebnis->entityId === null) {
+                $release->delete();
+            }
+
+            return [$release, $ergebnis];
+        });
 
         return back()
             ->with($ergebnis->ok ? 'status' : 'error', $ergebnis->meldung)
@@ -232,10 +278,21 @@ class ReviewController extends Controller
             return back()->with('error', 'Für dieses Objekt ist kein Energieausweisdatensatz vorhanden.');
         }
 
+        // Prüfbericht 2026-09-12, Befund 3: die Bestätigung ist nur
+        // zulässig, solange die Ausnahme tatsächlich noch zu prüfen ist,
+        // sonst bestätigt der Endpunkt eine Begründung zu einem Status, der
+        // gar keine Bestätigung verlangt.
+        if ($energy->status?->normalisiert() !== EnergieausweisStatus::AusnahmeZuPruefen) {
+            return back()->with('error', 'Die Ausnahme kann nur bestätigt werden, solange der Energieausweisstatus "Ausnahme zu prüfen" ist.');
+        }
+
+        $begruendung = $request->string('ausnahme_begruendung')->value();
+
         $energy->update([
-            'ausnahme_begruendung' => $request->string('ausnahme_begruendung')->value(),
+            'ausnahme_begruendung' => $begruendung,
             'ausnahme_bestaetigt_von_user_id' => $request->user()->id,
             'ausnahme_bestaetigt_at' => now(),
+            'ausnahme_bestaetigt_hash' => ListingEnergy::hashBegruendung($begruendung),
         ]);
 
         return back()->with('status', 'Die Ausnahme von der Energieausweispflicht wurde bestätigt.');
@@ -259,6 +316,14 @@ class ReviewController extends Controller
         foreach ($labels as $spalte => $label) {
             if (ListingPreviewBuilder::enthaeltAdresse($listing, $listing->{$spalte})) {
                 $treffer[] = $label;
+            }
+        }
+
+        // Prüfbericht 2026-09-12, Befund 4: Bildtitel veröffentlichbarer
+        // Medien zählen ebenso zum Adressleck wie die Texte.
+        foreach ($listing->media as $medium) {
+            if ($medium->istVeroeffentlichbar() && ListingPreviewBuilder::enthaeltAdresse($listing, $medium->titel)) {
+                $treffer[] = 'Bildtitel "'.$medium->titel.'"';
             }
         }
 

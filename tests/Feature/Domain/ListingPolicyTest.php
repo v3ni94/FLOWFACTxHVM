@@ -236,4 +236,37 @@ final class ListingPolicyTest extends TestCase
 
         $response->assertForbidden();
     }
+
+    /**
+     * Prüfbericht 2026-09-12, Befund 9: ein archiviertes Objekt ist ein
+     * eingefrorener Nachweisstand, es gibt keinen Übergang zurück. Weder
+     * Admin noch Mitarbeiter dürfen es über den Assistenten ändern.
+     */
+    public function test_ein_archiviertes_objekt_darf_von_niemandem_bearbeitet_werden(): void
+    {
+        $admin = User::factory()->admin()->create();
+        $mitarbeiter = User::factory()->create();
+        $listing = Listing::factory()->archiviert()->create(['erstellt_von_user_id' => $mitarbeiter->id]);
+
+        $this->assertFalse($admin->can('update', $listing));
+        $this->assertFalse($mitarbeiter->can('update', $listing));
+        $this->assertFalse($admin->can('publish', $listing));
+        $this->assertFalse($admin->can('withdraw', $listing));
+    }
+
+    public function test_ein_archiviertes_objekt_bleibt_ueber_schritt_formulare_und_autosave_unveraenderbar(): void
+    {
+        $user = User::factory()->create();
+        $listing = Listing::factory()->archiviert()->create(['bearbeiter_user_id' => $user->id, 'erstellt_von_user_id' => $user->id]);
+
+        $this->actingAs($user)
+            ->patchJson(route('app.listings.step.autosave', ['listing' => $listing, 'schritt' => 7]), ['titel' => 'Nach Archivierung geändert'])
+            ->assertForbidden();
+
+        $this->assertNotSame('Nach Archivierung geändert', $listing->fresh()->titel);
+
+        $this->actingAs($user)
+            ->post(route('app.listings.step.store', ['listing' => $listing, 'schritt' => 3]), ['baujahr' => '1999'])
+            ->assertForbidden();
+    }
 }

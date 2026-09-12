@@ -124,6 +124,12 @@
                             <x-flow.feld name="provision_text" label="Provisionstext" :value="$preis?->provision_text" placeholder="z. B. 3,57 % inkl. MwSt." />
                         </div>
                         <label class="field-inline">
+                            {{-- Prüfbericht 2026-09-12, Befund 13: ohne das
+                                 versteckte "0" fehlt der Schlüssel im POST,
+                                 sobald das Kästchen deaktiviert wird, und die
+                                 Bestätigung lässt sich über die Oberfläche
+                                 nie zurücknehmen. --}}
+                            <input type="hidden" name="provision_bestaetigt" value="0">
                             <input type="checkbox" name="provision_bestaetigt" value="1" @checked($preis?->provision_bestaetigt)>
                             <span>Provisionsangabe geprüft und bestätigt</span>
                         </label>

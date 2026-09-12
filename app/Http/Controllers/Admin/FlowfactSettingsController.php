@@ -38,7 +38,11 @@ class FlowfactSettingsController extends Controller
 
     public const string SCHEMATA = 'flowfact.schemata';
 
-    public function edit(SettingsRepository $settings, FieldMappingResolver $resolver): View
+    public const string LEERE_FELDER_AN = 'an';
+
+    public const string LEERE_FELDER_AUS = 'aus';
+
+    public function edit(SettingsRepository $settings, FieldMappingResolver $resolver, ListingSyncService $sync): View
     {
         $schemaMiete = $this->text($settings->get(ListingSyncService::SCHEMA_MIETE));
         $schemaKauf = $this->text($settings->get(ListingSyncService::SCHEMA_KAUF));
@@ -52,6 +56,8 @@ class FlowfactSettingsController extends Controller
             'schemata' => $this->liste($settings->get(self::SCHEMATA)),
             'verbindungGeprueftAt' => $this->datum($settings->get(self::VERBINDUNG_GEPRUEFT_AT)),
             'verbindungErgebnis' => $this->text($settings->get(self::VERBINDUNG_ERGEBNIS)),
+            'konfliktverhalten' => $sync->konfliktverhalten(),
+            'leereFelderLoeschen' => $sync->leereFelderLoeschen() ? self::LEERE_FELDER_AN : self::LEERE_FELDER_AUS,
             'felder' => $resolver->felder(),
             'codes' => $resolver->codes(),
             'schemaFelder' => $this->schemaFelder($settings, array_filter([$schemaMiete, $schemaKauf])),
@@ -86,6 +92,16 @@ class FlowfactSettingsController extends Controller
         $this->setzeOderVergesse($settings, SettingsTokenProvider::COMPANY_KEY, $request->input('company_id'));
         $this->setzeOderVergesse($settings, ListingSyncService::SCHEMA_MIETE, $request->input('schema_miete'));
         $this->setzeOderVergesse($settings, ListingSyncService::SCHEMA_KAUF, $request->input('schema_kauf'));
+
+        // Prüfbericht 2026-09-12, Befund 14: Konfliktverhalten und Löschsemantik
+        // sind im Adminbereich einstellbar (docs/connector.md Abschnitt 7).
+        if ($request->filled('konfliktverhalten')) {
+            $settings->set(ListingSyncService::KONFLIKTVERHALTEN, $request->string('konfliktverhalten')->value());
+        }
+
+        if ($request->filled('leere_felder_loeschen')) {
+            $settings->set(ListingSyncService::LEERE_FELDER_LOESCHEN, $request->string('leere_felder_loeschen')->value() === self::LEERE_FELDER_AN);
+        }
 
         return redirect()->route('admin.flowfact.edit')
             ->with('status', 'Die FLOWFACT-Einstellungen wurden gespeichert.');

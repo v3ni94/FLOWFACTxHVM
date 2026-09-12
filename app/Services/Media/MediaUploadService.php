@@ -232,4 +232,32 @@ final class MediaUploadService
 
         return Storage::disk('media')->exists($vorschauPfad) ? $vorschauPfad : null;
     }
+
+    /**
+     * Kopiert eine Mediendatei physisch an einen neuen Pfad, inklusive ihrer
+     * Vorschauvariante, sofern eine vorhanden ist (Prüfbericht 2026-09-12,
+     * Befund 15: das Duplizieren eines Objekts kopierte bisher nur die
+     * Originaldatei; das Duplikat zeigte in Übersicht und Schritt 6
+     * dadurch das Original in voller Größe statt der kleinen Vorschau).
+     * Original und Kopie bleiben unabhängige Dateien.
+     */
+    public function copyWithPreview(ListingMedia $original, string $neuerPfad): void
+    {
+        if (! Storage::disk('media')->exists($original->pfad)) {
+            return;
+        }
+
+        Storage::disk('media')->copy($original->pfad, $neuerPfad);
+
+        $vorhandeneVorschau = $this->vorschauPfad($original);
+
+        if ($vorhandeneVorschau === null) {
+            return;
+        }
+
+        $neuesVerzeichnis = pathinfo($neuerPfad, PATHINFO_DIRNAME);
+        $neuerDateiname = pathinfo($neuerPfad, PATHINFO_FILENAME);
+
+        Storage::disk('media')->copy($vorhandeneVorschau, $neuesVerzeichnis.'/'.$neuerDateiname.'_vorschau.jpg');
+    }
 }

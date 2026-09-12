@@ -70,6 +70,26 @@ class ListingPrice extends Model
     protected static function booted(): void
     {
         static::saving(function (ListingPrice $preis): void {
+            // Prüfbericht 2026-09-12, Befund 13: die Provisionsbestätigung
+            // gilt nur für den bestätigten Text. Ändert sich Provisionstext
+            // oder -typ eines bereits bestehenden Datensatzes in einem
+            // Speichervorgang, der "provision_bestaetigt" selbst nicht
+            // ausdrücklich mitändert, verliert eine zuvor erteilte
+            // Bestätigung ihre Gültigkeit (ein unverändert angehaktes
+            // Kästchen bestätigt nicht automatisch einen neuen Text). Werden
+            // Text und Bestätigung dagegen in einem Zug geändert (die
+            // Oberfläche sendet beides zusammen), gilt das als bewusste,
+            // neue Bestätigung. Auf einem neu angelegten Datensatz greift
+            // die Rücksetzung nicht, da es dort noch keine frühere
+            // Bestätigung gibt, die entwertet werden könnte.
+            if ($preis->exists
+                && ($preis->isDirty('provision_text') || $preis->isDirty('provision_typ'))
+                && ! $preis->isDirty('provision_bestaetigt')) {
+                $preis->provision_bestaetigt = false;
+            }
+        });
+
+        static::saving(function (ListingPrice $preis): void {
             if ($preis->isDirty('heizkosten_struktur') && $preis->heizkosten_struktur !== null) {
                 $preis->heizkosten_in_nebenkosten_enthalten = PriceStructure::heizkostenEnthalten($preis->heizkosten_struktur);
 

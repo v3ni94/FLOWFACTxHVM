@@ -5,9 +5,11 @@ declare(strict_types=1);
 namespace Tests\Unit\Domain\Listing;
 
 use App\Domain\Listing\CompletenessCheck;
+use App\Enums\AdressFreigabe;
 use App\Enums\HeizkostenVersorgung;
 use App\Enums\Objektart;
 use App\Enums\ProvisionTyp;
+use App\Enums\PruefEbene;
 use App\Enums\Vermarktungsart;
 use App\Http\Controllers\App\Support\CompletenessFieldMap;
 use App\Models\Listing;
@@ -124,5 +126,42 @@ final class CompletenessCheckTest extends TestCase
 
         $this->assertFalse($ergebnis->istVollstaendig());
         $this->assertArrayHasKey('preis.provision_text', $ergebnis->fehlend);
+    }
+
+    /**
+     * Prüfbericht 2026-09-12, Befund 4: B.7 verlangt die Adressprüfung auch
+     * für Bildtitel veröffentlichbarer Medien, nicht nur für Überschrift und
+     * Beschreibungen.
+     */
+    public function test_ein_bildtitel_mit_strasse_blockiert_bei_eingeschraenkter_adressfreigabe(): void
+    {
+        $listing = Listing::factory()->vollstaendig()->create([
+            'strasse' => 'Musterstraße', 'hausnummer' => '12',
+            'adress_freigabe' => AdressFreigabe::NurPlzOrt,
+        ]);
+        $listing->media()->update(['titel' => 'Fassade Musterstraße 12']);
+
+        $befunde = app(CompletenessCheck::class)->befunde($listing->fresh(['price', 'energy', 'media']));
+        $medienTitelBefunde = array_values(array_filter($befunde, fn ($b) => $b->feld === 'medien.titel'));
+
+        $this->assertNotSame([], $medienTitelBefunde, 'Ein Bildtitel mit Straße muss als Befund erscheinen.');
+        $this->assertTrue($medienTitelBefunde[0]->istBlockierend());
+        $this->assertSame(PruefEbene::Portal, $medienTitelBefunde[0]->ebene);
+
+        $ergebnis = app(CompletenessCheck::class)->check($listing->fresh(['price', 'energy', 'media']));
+        $this->assertArrayHasKey('medien.titel', $ergebnis->fehlend);
+    }
+
+    public function test_ein_bildtitel_mit_strasse_ist_unschaedlich_bei_vollstaendiger_adressfreigabe(): void
+    {
+        $listing = Listing::factory()->vollstaendig()->create([
+            'strasse' => 'Musterstraße', 'hausnummer' => '12',
+            'adress_freigabe' => AdressFreigabe::Vollstaendig,
+        ]);
+        $listing->media()->update(['titel' => 'Fassade Musterstraße 12']);
+
+        $ergebnis = app(CompletenessCheck::class)->check($listing->fresh(['price', 'energy', 'media']));
+
+        $this->assertArrayNotHasKey('medien.titel', $ergebnis->fehlend);
     }
 }

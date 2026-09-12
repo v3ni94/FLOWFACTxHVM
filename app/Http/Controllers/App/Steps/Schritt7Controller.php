@@ -51,7 +51,7 @@ final class Schritt7Controller extends AbstractStep implements StepHandler
         $daten = $validiert->validated();
 
         $this->saveWithTracking($listing, function (Listing $listing) use ($request, $daten): void {
-            $this->anwenden($request, $listing, $daten);
+            $this->anwenden($request, $listing, $daten, historieSchreiben: true);
         });
 
         return $this->redirectNachSpeichern($request, $listing);
@@ -68,8 +68,12 @@ final class Schritt7Controller extends AbstractStep implements StepHandler
             return $this->autosaveFehler($exception);
         }
 
+        // Prüfbericht 2026-09-12, Befund 6: der Autosave darf keine
+        // listing_texts-Zeile anlegen, sonst wächst die Textversionierung
+        // mit jeder Eingabepause. Nur "Weiter" oder "Entwurf speichern"
+        // (store()) schreiben die Historie.
         $this->saveWithTracking($listing, function (Listing $listing) use ($request, $daten): void {
-            $this->anwenden($request, $listing, $daten);
+            $this->anwenden($request, $listing, $daten, historieSchreiben: false);
         });
 
         return $this->autosaveErfolg($listing);
@@ -78,7 +82,7 @@ final class Schritt7Controller extends AbstractStep implements StepHandler
     /**
      * @param  array<string, mixed>  $daten
      */
-    private function anwenden(Request $request, Listing $listing, array $daten): void
+    private function anwenden(Request $request, Listing $listing, array $daten, bool $historieSchreiben): void
     {
         $titelAlt = $listing->titel;
         $aenderungen = [];
@@ -95,7 +99,7 @@ final class Schritt7Controller extends AbstractStep implements StepHandler
             $listing->update($aenderungen);
         }
 
-        if ($listing->titel !== null && $listing->titel !== $titelAlt) {
+        if ($historieSchreiben && $listing->titel !== null && $listing->titel !== $titelAlt) {
             $listing->texts()->create([
                 'feld' => TextFeld::Titel,
                 'quelle' => TextQuelle::Manuell,

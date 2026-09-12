@@ -10,6 +10,8 @@ use App\Enums\ListingStatus;
 use App\Enums\TextFeld;
 use App\Enums\TextQuelle;
 use App\Models\Listing;
+use App\Models\ListingChange;
+use App\Models\ListingText;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
@@ -168,5 +170,46 @@ final class Step8Test extends TestCase
 
         $this->assertNotNull($text);
         $this->assertSame((new ListingContentHasher)->hash($listing), $text->datenbasis_hash);
+    }
+
+    /**
+     * Prüfbericht 2026-09-12, Befund 6: der Autosave in Schritt 8 darf keine
+     * listing_texts-Zeile anlegen (nur store() tut das), und aufeinanderfolgende
+     * Änderungen derselben Textspalte durch denselben Benutzer innerhalb von
+     * zehn Minuten werden vom Observer zu einer listing_changes-Zeile
+     * zusammengefasst statt bei jedem Autosave eine neue anzulegen.
+     */
+    public function test_autosave_in_schritt_8_erzeugt_keine_listing_texts_zeilen_und_buendelt_die_historie(): void
+    {
+        $user = User::factory()->create();
+        $listing = Listing::factory()->create(['bearbeiter_user_id' => $user->id, 'erstellt_von_user_id' => $user->id]);
+        $text = '';
+
+        for ($i = 1; $i <= 5; $i++) {
+            $text .= 'Satz '.$i.' der Objektbeschreibung mit einigen Worten. ';
+            $this->actingAs($user)->patchJson(
+                route('app.listings.step.autosave', ['listing' => $listing, 'schritt' => 8]),
+                ['beschreibung_objekt' => $text]
+            )->assertOk();
+        }
+
+        self::assertSame(0, ListingText::query()->where('listing_id', $listing->id)->count());
+
+        $aenderungen = ListingChange::query()->where('listing_id', $listing->id)->where('feld', 'listings.beschreibung_objekt')->get();
+        self::assertCount(1, $aenderungen, 'Fünf Autosaves innerhalb weniger Sekunden dürfen nur eine gebündelte Historienzeile erzeugen.');
+        self::assertSame('', (string) $aenderungen->first()->alt);
+        // TrimStrings (Middleware) entfernt das abschließende Leerzeichen aus der Eingabe.
+        self::assertSame(rtrim($text), $aenderungen->first()->neu);
+
+        // Erst "Weiter" schreibt eine listing_texts-Zeile (mit einer
+        // tatsächlichen inhaltlichen Änderung, sonst überspringt store()
+        // unveränderte Felder ebenso wie der Autosave).
+        $text .= 'Abschlusssatz nach dem Speichern.';
+        $this->actingAs($user)->post(
+            route('app.listings.step.store', ['listing' => $listing, 'schritt' => 8]),
+            ['beschreibung_objekt' => $text, 'aktion' => 'weiter']
+        )->assertRedirect();
+
+        self::assertSame(1, ListingText::query()->where('listing_id', $listing->id)->count());
     }
 }

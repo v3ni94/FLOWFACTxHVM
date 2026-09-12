@@ -20,7 +20,8 @@ use Illuminate\Support\Carbon;
  * welcher Quelle (z. B. "POST /publish Antwort", "GET /estates/{id}/portals
  * onlineSince", "manuell"), zu welchem Zeitpunkt, mit welcher Freigabeversion
  * und durch welchen Benutzer. Ein Aufruf ohne Statusänderung aktualisiert nur
- * letzte_pruefung_at und schreibt keinen Nachweis.
+ * letzte_pruefung_at, schreibt keinen Nachweis und lässt updated_at
+ * unberührt (Prüfbericht 2026-09-12, Befund 2: updated_at ist kein Nachweis).
  *
  * Weitere Attribute der Publikation (angefordert_at, bestaetigt_at,
  * zurueckgezogen_at, letzter_fehler, release_id) setzt der Aufrufer vor dem
@@ -73,11 +74,13 @@ final class PortalStatusTransition
             $publication->release_id = $release->getKey();
         }
 
-        $publication->save();
-
         if ($alt === $neu) {
+            self::speichereOhneZeitstempel($publication);
+
             return;
         }
+
+        $publication->save();
 
         ListingPortalStatusLog::query()->create([
             'listing_id' => $publication->listing_id,
@@ -91,5 +94,27 @@ final class PortalStatusTransition
             'user_id' => $user?->getKey(),
             'created_at' => $jetzt,
         ]);
+    }
+
+    /**
+     * Speichert die Publikation, ohne updated_at zu verändern und ohne
+     * Modellereignisse auszulösen. Für Berührungen ohne Statuswechsel
+     * (letzte_pruefung_at), damit updated_at nur echte Änderungen abbildet
+     * (Prüfbericht 2026-09-12, Befund 2).
+     */
+    public static function speichereOhneZeitstempel(ListingPortalPublication $publication): void
+    {
+        if (! $publication->isDirty()) {
+            return;
+        }
+
+        $zeitstempel = $publication->timestamps;
+        $publication->timestamps = false;
+
+        try {
+            $publication->saveQuietly();
+        } finally {
+            $publication->timestamps = $zeitstempel;
+        }
     }
 }

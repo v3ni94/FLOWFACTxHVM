@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Feature\Listing;
 
+use App\Enums\ProvisionTyp;
 use App\Models\Listing;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -203,6 +204,69 @@ final class WizardStep4RentTest extends TestCase
         $preis = $listing->price->fresh();
         self::assertSame('provisionspflichtig', $preis->provision_typ->value);
         self::assertFalse($preis->provision_bestaetigt);
+    }
+
+    /**
+     * Prüfbericht 2026-09-12, Befund 13: die Provisionsbestätigung darf
+     * einen anderen Provisionstext oder -typ als den bestätigten nicht
+     * überdauern, auch wenn "provision_bestaetigt" im selben Speichervorgang
+     * unverändert mitgesendet wird (ein zuvor angehaktes Kästchen bestätigt
+     * nicht automatisch einen neuen Text).
+     */
+    public function test_die_provisionsbestaetigung_wird_bei_geaenderten_provisionsangaben_zurueckgesetzt(): void
+    {
+        $user = User::factory()->create();
+        $listing = Listing::factory()->miete()->vollstaendig()->create(['bearbeiter_user_id' => $user->id, 'erstellt_von_user_id' => $user->id]);
+
+        $this->actingAs($user)->patchJson(
+            route('app.listings.step.autosave', ['listing' => $listing, 'schritt' => 4]),
+            ['provision_typ' => 'provisionspflichtig', 'provision_text' => '3,57 % inkl. MwSt.', 'provision_bestaetigt' => '1']
+        )->assertOk();
+        self::assertTrue($listing->fresh()->price->provision_bestaetigt);
+
+        // Nur der Provisionstext ändert sich, "provision_bestaetigt" wird in
+        // diesem Autosave gar nicht mitgesendet.
+        $this->actingAs($user)->patchJson(
+            route('app.listings.step.autosave', ['listing' => $listing, 'schritt' => 4]),
+            ['provision_typ' => 'provisionspflichtig', 'provision_text' => '7,14 % inkl. MwSt.']
+        )->assertOk();
+        self::assertFalse($listing->fresh()->price->provision_bestaetigt, 'Die Bestätigung darf einen anderen Provisionstext nicht überdauern.');
+    }
+
+    /**
+     * Prüfbericht 2026-09-12, Befund 13: das versteckte "0"-Feld muss ein
+     * deaktiviertes Kästchen im normalen Formular-POST übertragen, sonst
+     * lässt sich eine erteilte Bestätigung nie zurücknehmen.
+     */
+    public function test_das_deaktivierte_kaestchen_nimmt_die_bestaetigung_im_formular_zurueck(): void
+    {
+        $user = User::factory()->create();
+        $listing = Listing::factory()->miete()->vollstaendig()->create(['bearbeiter_user_id' => $user->id, 'erstellt_von_user_id' => $user->id]);
+        $listing->price()->update(['provision_typ' => ProvisionTyp::Provisionspflichtig, 'provision_text' => '3,57 % inkl. MwSt.', 'provision_bestaetigt' => true]);
+
+        $seite = $this->actingAs($user)->get(route('app.listings.step', ['listing' => $listing, 'schritt' => 4]));
+        $seite->assertOk();
+        // Wie in schritt-6.blade.php üblich: ein verstecktes "0" vor der Checkbox.
+        self::assertMatchesRegularExpression(
+            '#<input type="hidden" name="provision_bestaetigt" value="0">\s*<input type="checkbox" name="provision_bestaetigt"#',
+            $seite->getContent()
+        );
+
+        $this->actingAs($user)->post(
+            route('app.listings.step.store', ['listing' => $listing, 'schritt' => 4]),
+            [
+                'aktion' => 'speichern',
+                'kaltmiete' => '800,00',
+                'nebenkosten' => '200,00',
+                'heizkosten_struktur' => 'zusaetzlich',
+                'stellplatz_modus' => 'keiner',
+                'provision_typ' => 'provisionspflichtig',
+                'provision_text' => '3,57 % inkl. MwSt.',
+                'provision_bestaetigt' => '0',
+            ]
+        )->assertSessionDoesntHaveErrors();
+
+        self::assertFalse($listing->fresh()->price->provision_bestaetigt);
     }
 
     public function test_ein_kaufobjekt_speichert_den_kaufpreis_ohne_warmmiete(): void

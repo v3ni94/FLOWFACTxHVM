@@ -119,3 +119,24 @@ Stellplatz optional und verpflichtend mit korrekter Gesamtdarstellung; unbekannt
 | 2 | Neuer Assistent Schritte 1 bis 6 mit Autosave (Sonnet); Schritte 7 und 8, Prüfen und veröffentlichen, Dashboard, Liste, Historie, Duplizieren (Sonnet) | 2 parallel |
 | 3 | Connector: Freigabeversionen, Fall B, Deaktivierung, Job-Schutz, Konflikterkennung (Fable); KI-Überarbeitungen, Vorlagenmodus, Adressprüfung, Medien drehen und Kategorien (Sonnet) | 2 parallel |
 | 4 | Dokumente: CLAUDE.md, Benutzer- und Adminanleitung, Backup und Restore, Fähigkeitsmatrix, Abnahmeprotokoll (Haiku oder Sonnet); kritische Prüfung (Fable) und Behebung | 2 parallel |
+
+## D. Stand nach Welle 4 (12.09.2026)
+
+Umgesetzt und mit Regressionstests belegt (767 Tests, CI mit SQLite und MariaDB): Wellen 1 bis 4 einschließlich
+der Behebung der 17 Befunde aus docs/pruefbericht-2026-09-12.md. Damit gelten die Abschnitte 5 bis 21, 23 bis 25,
+27, 28, 30 und 31 des Masterprompts als umgesetzt, soweit sie ohne echtes FLOWFACT-Konto umsetzbar sind.
+
+Weiterhin offen oder bewusst abweichend:
+
+| Punkt | Stand | Begründung oder nächster Schritt |
+| --- | --- | --- |
+| Verifikation gegen das echte FLOWFACT-Konto (Abschnitte 22, 32) | offen | Kein Token vorhanden. docs/faehigkeitsmatrix.md führt jede Funktion als simuliert oder nicht getestet. Smoke-Test nach Freigabe des Tokens |
+| Fall A oder Fall B | offen | Entscheidet sich erst am Konto; beide Wege sind implementiert und angezeigt |
+| § 87 GEG (Abschnitt 13) | Einschätzung | Rechtsquelle aus der Entwicklungsumgebung nicht abrufbar; Regelwerk mit Datum im Adminbereich sichtbar, vor Livegang durch Rechtsanwalt bestätigen |
+| PHP 8.4 und Livewire (Abschnitt 4) | abweichend | PHP 8.3 wegen bestätigtem IONOS-Profil, Code 8.4-kompatibel; Autosave und Interaktion ohne Build mit Vanilla-JS |
+| Verpixelung von Bildern (Abschnitt 14) | nicht umgesetzt | Als Ergänzung vorgesehen; Hinweistext im Uploadschritt vorhanden |
+| HEIC (Abschnitt 14) | abgelehnt mit Hinweis | Verarbeitung auf IONOS nicht garantiert; JPEG-Export empfohlen |
+| Bidirektionale Synchronisation (Abschnitt 23) | bewusst nicht | Müller FLOW führt für zugeordnete Felder, Konflikte werden erkannt und abgebrochen |
+| Zeit- und Klickmessung (Abschnitte 1, 32) | Vorlage vorhanden | docs/abnahmeprotokoll.md, Messung erfolgt im Abnahmetest mit echten Nutzern |
+| PHPStan | nicht installiert | Als Ziel vorgesehen |
+| Mobile Bedienbarkeit | Layout responsiv, kein Gerätetest | Im Abnahmetest auf Smartphone prüfen |

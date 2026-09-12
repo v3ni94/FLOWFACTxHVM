@@ -45,6 +45,18 @@ class ListingTextController extends Controller
         'beschreibung_sonstiges' => TextFeld::BeschreibungSonstiges,
     ];
 
+    /**
+     * Spaltenlängen der Zielfelder (Prüfbericht 2026-09-12, Befund 12):
+     * "titel" ist string(100); ein ungeprüft übernommener oder überarbeiteter
+     * Vorschlag speichert unter SQLite unbemerkt, unter MariaDB im strict
+     * mode antwortet die Datenbank mit einem SQL-Fehler und 500.
+     *
+     * @var array<string, int>
+     */
+    private const array FELDGRENZEN = [
+        'titel' => 100,
+    ];
+
     public function generate(TextGenerateRequest $request, Listing $listing, TextGenerator $generator): RedirectResponse
     {
         $ausgewaehlt = (array) $request->input('felder', []);
@@ -95,6 +107,12 @@ class ListingTextController extends Controller
         $this->authorize('update', $listing);
         abort_unless($text->listing_id === $listing->id, 404);
 
+        $grenze = self::FELDGRENZEN[$text->feld->value] ?? null;
+
+        if ($grenze !== null && mb_strlen((string) $text->inhalt) > $grenze) {
+            return back()->with('error', sprintf('Der Vorschlag ist mit %d Zeichen zu lang für das Feld (maximal %d Zeichen erlaubt) und wurde nicht übernommen.', mb_strlen((string) $text->inhalt), $grenze));
+        }
+
         $vorherHash = app(ListingContentHasher::class)->hash($listing);
 
         $listing->update([$text->feld->value => $text->inhalt]);
@@ -119,12 +137,23 @@ class ListingTextController extends Controller
     {
         $this->authorize('update', $listing);
 
+        // Prüfbericht 2026-09-12, Befund 12: für den Titel gilt dieselbe
+        // Spaltengrenze wie bei der Übernahme (string(100)); eine zu lange
+        // Vorlage wird erst gar nicht zur Überarbeitung angenommen.
+        $titelGrenze = self::FELDGRENZEN['titel'];
+
         $validator = Validator::make($request->all(), [
             'feld' => ['required', Rule::enum(TextFeld::class)],
-            'text' => ['required', 'string'],
+            'text' => [
+                'required',
+                'string',
+                Rule::when(fn (): bool => $request->input('feld') === TextFeld::Titel->value, ['max:'.$titelGrenze]),
+            ],
             'anweisung' => ['required', Rule::in([
                 TextReviser::KUERZER, TextReviser::SACHLICHER, TextReviser::SPRACHLICH,
             ])],
+        ], [
+            'text.max' => 'Der Titel darf höchstens '.$titelGrenze.' Zeichen lang sein.',
         ]);
 
         $validator->validate();
@@ -138,6 +167,12 @@ class ListingTextController extends Controller
             $ueberarbeitet = $reviser->revise($listing, $text, $anweisung);
         } catch (TextGenerationException $exception) {
             return back()->with('error', $exception->getMessage());
+        }
+
+        $grenze = self::FELDGRENZEN[$feld->value] ?? null;
+
+        if ($grenze !== null && mb_strlen($ueberarbeitet) > $grenze) {
+            return back()->with('error', sprintf('Die Überarbeitung ist mit %d Zeichen zu lang für das Feld (maximal %d Zeichen erlaubt) und wurde verworfen.', mb_strlen($ueberarbeitet), $grenze));
         }
 
         $listing->texts()->create([

@@ -65,7 +65,7 @@ final class Schritt8Controller extends AbstractStep implements StepHandler
         $daten = $validiert->validated();
 
         $this->saveWithTracking($listing, function (Listing $listing) use ($request, $daten): void {
-            $this->speichereFelder($request, $listing, $daten);
+            $this->speichereFelder($request, $listing, $daten, historieSchreiben: true);
         });
 
         return $this->redirectNachSpeichern($request, $listing);
@@ -84,8 +84,12 @@ final class Schritt8Controller extends AbstractStep implements StepHandler
             return $this->autosaveFehler($exception);
         }
 
+        // Prüfbericht 2026-09-12, Befund 6: der Autosave darf keine
+        // listing_texts-Zeile anlegen, sonst wächst die Textversionierung
+        // mit jeder Eingabepause. Nur "Weiter" oder "Entwurf speichern"
+        // (store()) schreiben die Historie.
         $this->saveWithTracking($listing, function (Listing $listing) use ($request, $daten): void {
-            $this->speichereFelder($request, $listing, $daten);
+            $this->speichereFelder($request, $listing, $daten, historieSchreiben: false);
         });
 
         return $this->autosaveErfolg($listing);
@@ -94,7 +98,7 @@ final class Schritt8Controller extends AbstractStep implements StepHandler
     /**
      * @param  array<string, mixed>  $daten
      */
-    private function speichereFelder(Request $request, Listing $listing, array $daten): void
+    private function speichereFelder(Request $request, Listing $listing, array $daten, bool $historieSchreiben): void
     {
         $aenderungen = [];
         $geaenderteSpalten = [];
@@ -119,6 +123,10 @@ final class Schritt8Controller extends AbstractStep implements StepHandler
         }
 
         $listing->update($aenderungen);
+
+        if (! $historieSchreiben) {
+            return;
+        }
 
         foreach ($geaenderteSpalten as $spalte) {
             $wert = $listing->{$spalte};

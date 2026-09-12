@@ -84,6 +84,16 @@ final class Money
             return null;
         }
 
+        // Prüfbericht 2026-09-12, Befund 11: mehr als 12 Ziffern vor dem
+        // Komma lässt "((int) $ganzzahlteil) * 100" unter strict_types zu
+        // einem TypeError werden (Cast auf float, kein impliziter Cast
+        // zurück auf int). Zwölf Stellen reichen für jeden realistischen
+        // Betrag um ein Vielfaches; eine längere Eingabe gilt als ungültig
+        // statt einen internen Serverfehler auszulösen.
+        if (strlen($ganzzahlteil) > 12) {
+            return null;
+        }
+
         $cent = ((int) $ganzzahlteil) * 100 + (int) $nachkomma;
 
         return $negativ ? -$cent : $cent;

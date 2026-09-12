@@ -37,6 +37,12 @@ final class FlowfactPayloadMapper
     /** @var list<string> */
     private array $leereFelder = [];
 
+    /** @var list<string> */
+    private array $leereQuellen = [];
+
+    /** @var array<string, string> eigenes Feld => FLOWFACT-Feld der gesendeten Werte */
+    private array $zuordnung = [];
+
     private ?string $blockiert = null;
 
     public function __construct(
@@ -56,6 +62,8 @@ final class FlowfactPayloadMapper
         $warnungen = [];
         $adresse = [];
         $this->leereFelder = [];
+        $this->leereQuellen = [];
+        $this->zuordnung = [];
         $this->blockiert = null;
 
         $daten = $snapshot->listing;
@@ -97,9 +105,12 @@ final class FlowfactPayloadMapper
 
         $this->adresse($adresse, $fields, $warnungen);
 
-        // Status ist immer active: Entwürfe kommen nie bis hierher, weil der
-        // Sync-Service sie vorher ablehnt.
+        // Status ist active: Entwürfe kommen nie bis hierher, weil der
+        // Sync-Service sie vorher ablehnt. Fehlt dem handelnden Benutzer das
+        // Veröffentlichungsrecht, setzt der Sync-Service inactive
+        // (MappedPayload::mitStatus, Prüfbericht 2026-09-12, Befund 10).
         $fields['status'] = ['values' => ['active']];
+        $this->zuordnung['status'] = 'status';
 
         $leereFelder = array_values(array_unique(array_filter(
             $this->leereFelder,
@@ -112,6 +123,8 @@ final class FlowfactPayloadMapper
             showAddress: $this->showAddress($daten),
             leereFelder: $leereFelder,
             blockiert: $this->blockiert,
+            zuordnung: array_filter($this->zuordnung, static fn (string $ziel): bool => array_key_exists($ziel, $fields)),
+            leereQuellen: array_values(array_unique($this->leereQuellen)),
         );
     }
 
@@ -158,6 +171,7 @@ final class FlowfactPayloadMapper
         if ($objektartWert === '') {
             if ($ziel !== null) {
                 $this->leereFelder[] = $ziel;
+                $this->leereQuellen[] = 'objektart';
             }
 
             return;
@@ -183,6 +197,7 @@ final class FlowfactPayloadMapper
             }
 
             $fields[$ziel] = ['values' => [$code]];
+            $this->zuordnung['objektart'] = $ziel;
 
             return;
         }
@@ -200,6 +215,7 @@ final class FlowfactPayloadMapper
         }
 
         $fields[$ziel] = ['values' => [$code]];
+        $this->zuordnung['objektart'] = $ziel;
     }
 
     /**
@@ -254,6 +270,7 @@ final class FlowfactPayloadMapper
 
             if ($ziel !== null) {
                 $this->leereFelder[] = $ziel;
+                $this->leereQuellen[] = $feld;
             }
 
             return;
@@ -277,6 +294,7 @@ final class FlowfactPayloadMapper
         }
 
         $fields[$ziel] = ['values' => [$konvertiert]];
+        $this->zuordnung[$feld] = $ziel;
     }
 
     /**
@@ -319,6 +337,7 @@ final class FlowfactPayloadMapper
         }
 
         $fields[$ziel] = ['values' => [FieldCatalog::NUTZUNGSSTATUS_LET[$status]]];
+        $this->zuordnung[$feld] = $ziel;
     }
 
     /**
@@ -422,6 +441,7 @@ final class FlowfactPayloadMapper
         if ($strasse === '' && $plz === '' && $ort === '') {
             if ($ziel !== null) {
                 $this->leereFelder[] = $ziel;
+                $this->leereQuellen[] = FieldCatalog::ADRESSFELD;
             }
 
             return;
@@ -442,5 +462,6 @@ final class FlowfactPayloadMapper
             'city' => $ort,
             'country' => $land === 'DE' || $land === '' ? 'Deutschland' : $land,
         ]]];
+        $this->zuordnung[FieldCatalog::ADRESSFELD] = $ziel;
     }
 }

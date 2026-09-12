@@ -25,6 +25,7 @@ use Illuminate\Support\Carbon;
  * @property list<array<string, mixed>> $medien_json
  * @property list<string> $portale_json
  * @property string $inhalt_hash
+ * @property list<string>|null $gesendete_felder_json
  * @property int|null $freigegeben_von_user_id
  * @property Carbon $freigegeben_at
  * @property ReleaseAktion $aktion
@@ -46,6 +47,7 @@ class ListingRelease extends Model
             'payload_json' => 'array',
             'medien_json' => 'array',
             'portale_json' => 'array',
+            'gesendete_felder_json' => 'array',
             'freigegeben_at' => 'datetime',
             'aktion' => ReleaseAktion::class,
         ];
@@ -93,6 +95,49 @@ class ListingRelease extends Model
     public function portalIds(): array
     {
         return array_values(array_map('strval', is_array($this->portale_json) ? $this->portale_json : []));
+    }
+
+    /**
+     * FLOWFACT-Feldnamen, die mit dieser Version tatsächlich gesendet wurden
+     * (Prüfbericht 2026-09-12, Befund 5); null, solange die Version nicht
+     * übertragen wurde oder vor Einführung der Spalte übertragen wurde.
+     *
+     * @return list<string>|null
+     */
+    public function gesendeteFelder(): ?array
+    {
+        $felder = $this->gesendete_felder_json;
+
+        if (! is_array($felder)) {
+            return null;
+        }
+
+        return array_values(array_unique(array_map('strval', array_filter($felder, 'is_scalar'))));
+    }
+
+    /**
+     * Eigenes Feld => FLOWFACT-Feld der letzten Übertragung (Befund 5).
+     * Ältere Listen ohne Schlüssel liefern eine leere Zuordnung.
+     *
+     * @return array<string, string>
+     */
+    public function gesendeteZuordnung(): array
+    {
+        $felder = $this->gesendete_felder_json;
+
+        if (! is_array($felder)) {
+            return [];
+        }
+
+        $zuordnung = [];
+
+        foreach ($felder as $quelle => $ziel) {
+            if (is_string($quelle) && is_scalar($ziel)) {
+                $zuordnung[$quelle] = (string) $ziel;
+            }
+        }
+
+        return $zuordnung;
     }
 
     /**

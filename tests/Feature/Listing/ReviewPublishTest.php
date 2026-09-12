@@ -4,8 +4,11 @@ declare(strict_types=1);
 
 namespace Tests\Feature\Listing;
 
+use App\Domain\Listing\CompletenessCheck;
+use App\Enums\AdressFreigabe;
 use App\Enums\EnergieausweisStatus;
 use App\Enums\ListingStatus;
+use App\Enums\PortalStatus;
 use App\Enums\PruefEbene;
 use App\Flowfact\Sync\NullPublishingService;
 use App\Flowfact\Sync\PortalInfo;
@@ -13,6 +16,7 @@ use App\Flowfact\Sync\PublishingService;
 use App\Flowfact\Sync\PublishResult;
 use App\Flowfact\Sync\SyncResult;
 use App\Models\Listing;
+use App\Models\ListingPortalPublication;
 use App\Models\ListingRelease;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -38,6 +42,35 @@ final class ReviewPublishTest extends TestCase
 
         $response->assertOk();
         $response->assertSee('Titel');
+    }
+
+    /**
+     * Prüfbericht 2026-09-12, Befund 4: ein Bildtitel mit Straße oder
+     * Hausnummer muss bei eingeschränkter Adressfreigabe die Prüfseite
+     * warnen, Schritt 6 warnen und die Veröffentlichung blockieren.
+     */
+    public function test_ein_bildtitel_mit_strasse_warnt_auf_der_pruefseite_und_in_schritt_6_und_blockiert_die_veroeffentlichung(): void
+    {
+        $user = User::factory()->admin()->create();
+        $listing = Listing::factory()->vollstaendig()->create([
+            'strasse' => 'Musterstraße', 'hausnummer' => '12',
+            'adress_freigabe' => AdressFreigabe::NurPlzOrt,
+            'titel' => 'Helle Wohnung in Hilden',
+        ]);
+        $listing->media()->update(['titel' => 'Fassade Musterstraße 12']);
+
+        $pruefseite = $this->actingAs($user)->get(route('app.listings.review', $listing));
+        $pruefseite->assertOk();
+        $pruefseite->assertSee('enthalten dennoch Straße oder Hausnummer');
+        $pruefseite->assertSee('Fassade Musterstraße 12');
+
+        $schritt6 = $this->actingAs($user)->get(route('app.listings.step', ['listing' => $listing, 'schritt' => 6]));
+        $schritt6->assertOk();
+        $schritt6->assertSee('Fassade Musterstraße 12');
+
+        $antwort = $this->actingAs($user)->post(route('app.listings.publish', $listing), ['portale' => ['immoscout24']]);
+        $antwort->assertSessionHas('error');
+        self::assertSame(0, ListingRelease::query()->where('listing_id', $listing->id)->count(), 'Die Freigabe darf den Bildtitel mit Straße nicht einfrieren.');
     }
 
     public function test_interne_daten_erscheinen_niemals_auf_der_pruefseite(): void
@@ -232,6 +265,75 @@ final class ReviewPublishTest extends TestCase
         $response->assertForbidden();
     }
 
+    /**
+     * Prüfbericht 2026-09-12, Befund 10: "In FLOWFACT speichern" legt die
+     * Entität mit status active an und ist deshalb an dieselbe Berechtigung
+     * wie das Veröffentlichen gebunden, nicht nur an "update".
+     */
+    public function test_mitarbeiter_ohne_veroeffentlichungsrecht_darf_nicht_in_flowfact_speichern(): void
+    {
+        $mitarbeiter = User::factory()->ohneVeroeffentlichungsrecht()->create();
+        $listing = Listing::factory()->vollstaendig()->create([
+            'bearbeiter_user_id' => $mitarbeiter->id,
+            'erstellt_von_user_id' => $mitarbeiter->id,
+            'status' => ListingStatus::Bereit,
+        ]);
+
+        $response = $this->actingAs($mitarbeiter)->post(route('app.listings.transfer', $listing));
+
+        $response->assertForbidden();
+        self::assertSame(0, ListingRelease::query()->where('listing_id', $listing->id)->count());
+    }
+
+    /**
+     * Prüfbericht 2026-09-12, Befund 17: die Prüfseite darf die Formulare
+     * für Veröffentlichen, Übertragen und Deaktivieren nicht anzeigen, wenn
+     * der Betrachter die Aktion ohnehin nicht ausführen darf.
+     */
+    public function test_leser_sieht_keine_veroeffentlichen_und_uebertragen_schaltflaechen(): void
+    {
+        $leser = User::factory()->leser()->create();
+        $listing = Listing::factory()->vollstaendig()->create(['status' => ListingStatus::Bereit]);
+
+        $seite = $this->actingAs($leser)->get(route('app.listings.review', $listing));
+
+        $seite->assertOk();
+        $seite->assertDontSee('JETZT VERÖFFENTLICHEN');
+        $seite->assertDontSee('In FLOWFACT speichern');
+
+        $this->actingAs($leser)->post(route('app.listings.transfer', $listing))->assertForbidden();
+        $this->actingAs($leser)->post(route('app.listings.publish', $listing), ['portale' => ['x']])->assertForbidden();
+    }
+
+    public function test_mitarbeiter_ohne_veroeffentlichungsrecht_sieht_keine_veroeffentlichen_und_uebertragen_schaltflaechen(): void
+    {
+        $mitarbeiter = User::factory()->ohneVeroeffentlichungsrecht()->create();
+        $listing = Listing::factory()->vollstaendig()->create([
+            'bearbeiter_user_id' => $mitarbeiter->id,
+            'erstellt_von_user_id' => $mitarbeiter->id,
+            'status' => ListingStatus::Bereit,
+        ]);
+
+        $seite = $this->actingAs($mitarbeiter)->get(route('app.listings.review', $listing));
+
+        $seite->assertOk();
+        $seite->assertDontSee('JETZT VERÖFFENTLICHEN');
+        $seite->assertDontSee('In FLOWFACT speichern');
+    }
+
+    public function test_leser_sieht_kein_deaktivierungsformular(): void
+    {
+        $leser = User::factory()->leser()->create();
+        $listing = Listing::factory()->vollstaendig()->create(['status' => ListingStatus::Veroeffentlicht]);
+        ListingPortalPublication::factory()->create(['listing_id' => $listing->id, 'status' => PortalStatus::Aktiv]);
+
+        $seite = $this->actingAs($leser)->get(route('app.listings.review', $listing));
+
+        $seite->assertOk();
+        self::assertStringNotContainsString(route('app.listings.withdraw', $listing), $seite->getContent(), 'Das Deaktivierungsformular darf für Leser nicht im HTML stehen.');
+        $this->actingAs($leser)->post(route('app.listings.withdraw', $listing))->assertForbidden();
+    }
+
     public function test_admin_kann_die_ausnahme_vom_energieausweis_bestaetigen(): void
     {
         $admin = User::factory()->admin()->create();
@@ -261,6 +363,57 @@ final class ReviewPublishTest extends TestCase
         ]);
 
         $response->assertForbidden();
+    }
+
+    /**
+     * Prüfbericht 2026-09-12, Befund 3: eine bestätigte Ausnahme darf einen
+     * Statuswechsel und eine neue, nie geprüfte Begründung nicht überleben.
+     * Die Bestätigung ist an einen Hash der bestätigten Begründung gebunden.
+     */
+    public function test_die_bestaetigung_wird_ungueltig_wenn_ein_mitarbeiter_status_und_begruendung_aendert(): void
+    {
+        $admin = User::factory()->admin()->create();
+        $mitarbeiter = User::factory()->create();
+        $listing = Listing::factory()->vollstaendig()->create(['bearbeiter_user_id' => $mitarbeiter->id, 'erstellt_von_user_id' => $mitarbeiter->id]);
+        $listing->energy()->update(['status' => EnergieausweisStatus::AusnahmeZuPruefen, 'ausweistyp' => null, 'kennwert_kwh' => null, 'effizienzklasse' => null]);
+
+        $check = app(CompletenessCheck::class);
+        self::assertArrayHasKey('energie.ausnahme', $check->check($listing->fresh(['price', 'energy', 'media']))->fehlend);
+
+        $this->actingAs($admin)
+            ->post(route('app.listings.energy-exception.confirm', $listing), ['ausnahme_begruendung' => 'Baudenkmal laut Denkmalliste'])
+            ->assertSessionHas('status');
+        self::assertArrayNotHasKey('energie.ausnahme', $check->check($listing->fresh(['price', 'energy', 'media']))->fehlend);
+
+        // Mitarbeiter: Status auf "vorhanden", dann zurück auf Ausnahme mit eigener Begründung.
+        $this->actingAs($mitarbeiter)->post(route('app.listings.step.store', ['listing' => $listing, 'schritt' => 5]), ['energieausweis_status' => 'vorhanden'])->assertRedirect();
+        $this->actingAs($mitarbeiter)->post(route('app.listings.step.store', ['listing' => $listing, 'schritt' => 5]), ['energieausweis_status' => 'ausnahme_zu_pruefen', 'ausnahme_begruendung' => 'Abbruch geplant (vom Mitarbeiter eingetragen)'])->assertRedirect();
+
+        $energy = $listing->fresh()->energy;
+        self::assertSame('Abbruch geplant (vom Mitarbeiter eingetragen)', $energy->ausnahme_begruendung);
+        self::assertFalse($energy->ausnahmeBestaetigt(), 'Die neue Begründung darf nicht unter der alten Adminbestätigung laufen.');
+        self::assertArrayHasKey('energie.ausnahme', $check->check($listing->fresh(['price', 'energy', 'media']))->fehlend, 'Die Veröffentlichung muss ohne erneute Adminprüfung blockiert bleiben.');
+    }
+
+    /**
+     * Prüfbericht 2026-09-12, Befund 3: confirmEnergyException darf nur
+     * bestätigen, solange der Status tatsächlich "Ausnahme zu prüfen" ist.
+     */
+    public function test_confirm_energy_exception_lehnt_einen_falschen_status_ab(): void
+    {
+        $admin = User::factory()->admin()->create();
+        $mitarbeiter = User::factory()->create();
+        $listing = Listing::factory()->vollstaendig()->create(['bearbeiter_user_id' => $mitarbeiter->id, 'erstellt_von_user_id' => $mitarbeiter->id]);
+        $listing->energy()->update(['status' => EnergieausweisStatus::NochNichtVorhanden]);
+
+        $this->actingAs($admin)
+            ->post(route('app.listings.energy-exception.confirm', $listing), ['ausnahme_begruendung' => 'Irrtümlich bestätigt'])
+            ->assertSessionHas('error');
+
+        self::assertFalse($listing->fresh()->energy->ausnahmeBestaetigt());
+
+        $this->actingAs($mitarbeiter)->post(route('app.listings.step.store', ['listing' => $listing, 'schritt' => 5]), ['energieausweis_status' => 'ausnahme_zu_pruefen', 'ausnahme_begruendung' => 'x'])->assertRedirect();
+        self::assertArrayHasKey('energie.ausnahme', app(CompletenessCheck::class)->check($listing->fresh(['price', 'energy', 'media']))->fehlend);
     }
 
     private function fakePublishingService(): PublishingService

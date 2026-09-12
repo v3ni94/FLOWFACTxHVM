@@ -43,6 +43,12 @@ final class MoneyTest extends TestCase
             'leerer text ist ungueltig' => ['', null],
             'text ist ungueltig' => ['abc', null],
             'zu viele nachkommastellen sind ungueltig' => ['12,345', null],
+            // Prüfbericht 2026-09-12, Befund 11: zwölf Stellen vor dem
+            // Komma sind noch gültig ...
+            'zwoelf stellen sind noch gueltig' => ['123456789012', 12_345_678_901_200],
+            // ... 13 Stellen und mehr gelten als ungültig statt zu überlaufen.
+            'dreizehn stellen sind ungueltig' => ['1234567890123', null],
+            'sehr grosse zahl ist ungueltig statt zu ueberlaufen' => ['99999999999999999999', null],
         ];
     }
 
@@ -50,5 +56,15 @@ final class MoneyTest extends TestCase
     public function test_parse_wandelt_deutsche_eingaben_in_cent_um(string $eingabe, ?int $erwartet): void
     {
         $this->assertSame($erwartet, Money::parse($eingabe));
+    }
+
+    /**
+     * Prüfbericht 2026-09-12, Befund 11: Money::parse darf bei einer sehr
+     * großen Zahl nie einen TypeError werfen (Überlauf von int auf float
+     * unter strict_types beim Cast zurück auf int), sondern liefert null.
+     */
+    public function test_parse_mit_sehr_grosser_zahl_wirft_keinen_type_error(): void
+    {
+        $this->assertNull(Money::parse('99999999999999999999'));
     }
 }

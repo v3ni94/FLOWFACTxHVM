@@ -194,44 +194,49 @@
                 <div class="alert alert-warning">{{ \App\Flowfact\Sync\NullPublishingService::MELDUNG }}</div>
             @endif
 
-            <form method="POST" action="{{ route('app.listings.publish', $listing) }}" class="stack">
-                @csrf
+            {{-- Prüfbericht 2026-09-12, Befund 17: Leser sehen serverseitig
+                 stets 403 auf diese Aktionen; das Formular selbst bleibt
+                 ihnen verborgen. --}}
+            @can('publish', $listing)
+                <form method="POST" action="{{ route('app.listings.publish', $listing) }}" class="stack">
+                    @csrf
 
-                @if ($vollstaendigkeit->hinweise !== [])
-                    <div class="alert alert-warning">
-                        <p>Bitte bestätigen Sie vor der Veröffentlichung:</p>
-                        <div class="checkbox-group">
-                            @foreach ($vollstaendigkeit->hinweise as $index => $hinweis)
-                                <label class="field-inline">
-                                    <input type="checkbox" name="hinweise_bestaetigt[]" value="{{ $index }}" required>
-                                    <span>{{ $hinweis }}</span>
-                                </label>
-                            @endforeach
+                    @if ($vollstaendigkeit->hinweise !== [])
+                        <div class="alert alert-warning">
+                            <p>Bitte bestätigen Sie vor der Veröffentlichung:</p>
+                            <div class="checkbox-group">
+                                @foreach ($vollstaendigkeit->hinweise as $index => $hinweis)
+                                    <label class="field-inline">
+                                        <input type="checkbox" name="hinweise_bestaetigt[]" value="{{ $index }}" required>
+                                        <span>{{ $hinweis }}</span>
+                                    </label>
+                                @endforeach
+                            </div>
                         </div>
+                    @endif
+
+                    <label class="field-inline">
+                        <input type="checkbox" name="alle_portale" value="1">
+                        <span>Alle verfügbaren Portale auswählen</span>
+                    </label>
+
+                    <div class="checkbox-group @error('portale') has-error @enderror">
+                        @forelse ($portale as $portal)
+                            <label class="field-inline">
+                                <input type="checkbox" name="portale[]" value="{{ $portal->id }}" @checked(in_array($portal->id, $vorausgewaehltePortale, true))>
+                                <span>{{ $portal->name }}</span>
+                            </label>
+                        @empty
+                            <p class="hint">Es sind keine Portale verfügbar.</p>
+                        @endforelse
                     </div>
-                @endif
+                    @error('portale')<p class="error">{{ $message }}</p>@enderror
 
-                <label class="field-inline">
-                    <input type="checkbox" name="alle_portale" value="1">
-                    <span>Alle verfügbaren Portale auswählen</span>
-                </label>
-
-                <div class="checkbox-group @error('portale') has-error @enderror">
-                    @forelse ($portale as $portal)
-                        <label class="field-inline">
-                            <input type="checkbox" name="portale[]" value="{{ $portal->id }}" @checked(in_array($portal->id, $vorausgewaehltePortale, true))>
-                            <span>{{ $portal->name }}</span>
-                        </label>
-                    @empty
-                        <p class="hint">Es sind keine Portale verfügbar.</p>
-                    @endforelse
-                </div>
-                @error('portale')<p class="error">{{ $message }}</p>@enderror
-
-                <div class="cluster">
-                    <button type="submit" class="btn btn-primary" @disabled(empty($portale) || ! $vollstaendigkeit->istVollstaendig() || $adressLeck !== [])>JETZT VERÖFFENTLICHEN</button>
-                </div>
-            </form>
+                    <div class="cluster">
+                        <button type="submit" class="btn btn-primary" @disabled(empty($portale) || ! $vollstaendigkeit->istVollstaendig() || $adressLeck !== [])>JETZT VERÖFFENTLICHEN</button>
+                    </div>
+                </form>
+            @endcan
         </div>
     </div>
 
@@ -247,10 +252,14 @@
                 </form>
             @endif
 
-            <form method="POST" action="{{ route('app.listings.transfer', $listing) }}">
-                @csrf
-                <button type="submit" class="btn btn-secondary" @disabled(! $vollstaendigkeit->istVollstaendig())>In FLOWFACT speichern</button>
-            </form>
+            {{-- Prüfbericht 2026-09-12, Befund 10: "In FLOWFACT speichern"
+                 verlangt dasselbe Recht wie das Veröffentlichen. --}}
+            @can('publish', $listing)
+                <form method="POST" action="{{ route('app.listings.transfer', $listing) }}">
+                    @csrf
+                    <button type="submit" class="btn btn-secondary" @disabled(! $vollstaendigkeit->istVollstaendig())>In FLOWFACT speichern</button>
+                </form>
+            @endcan
         </div>
     </div>
 
@@ -258,6 +267,7 @@
         <div class="card">
             <div class="card-title">Auf ausgewählten Portalen deaktivieren</div>
             <div class="card-body stack">
+                @can('withdraw', $listing)
                 <form method="POST" action="{{ route('app.listings.withdraw', $listing) }}" data-confirm="Die ausgewählten Portalveröffentlichungen wirklich deaktivieren?" class="stack">
                     @csrf
                     <div class="checkbox-group">
@@ -272,6 +282,7 @@
                         <button type="submit" class="btn btn-danger">Auf ausgewählten Portalen deaktivieren</button>
                     </div>
                 </form>
+                @endcan
 
                 <div class="table-wrap">
                     <table class="table">

@@ -96,6 +96,21 @@ final class ListingIndexAndCreateTest extends TestCase
         $response->assertSee(route('app.listings.history', $listing), false);
     }
 
+    /**
+     * Prüfbericht 2026-09-12, Befund 9: die Schaltfläche "Bearbeiten" führt
+     * für ein archiviertes Objekt sonst zu einem Assistenten, der 403 wirft;
+     * sie muss verborgen bleiben.
+     */
+    public function test_die_detailseite_zeigt_bearbeiten_nur_fuer_nicht_archivierte_objekte(): void
+    {
+        $user = User::factory()->create();
+        $aktiv = Listing::factory()->vollstaendig()->create();
+        $archiviert = Listing::factory()->archiviert()->create();
+
+        $this->actingAs($user)->get(route('app.listings.show', $aktiv))->assertOk()->assertSee('Bearbeiten');
+        $this->actingAs($user)->get(route('app.listings.show', $archiviert))->assertOk()->assertDontSee('Bearbeiten');
+    }
+
     public function test_ein_neues_objekt_wird_als_entwurf_angelegt_und_leitet_zu_schritt_eins_weiter(): void
     {
         $user = User::factory()->create();

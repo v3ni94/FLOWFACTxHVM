@@ -10,6 +10,7 @@ use App\Enums\PortalStatus;
 use App\Enums\TransferRichtung;
 use App\Models\Listing;
 use App\Models\ListingPortalPublication;
+use App\Models\ListingPortalStatusLog;
 use App\Models\ListingRelease;
 use App\Models\TransferLog;
 
@@ -51,10 +52,26 @@ final class ReleaseGuard
     }
 
     /**
-     * Ob nach dem Freigabezeitpunkt eine Deaktivierung angefordert wurde:
-     * Rückzug (zurueckgezogen_at) oder Status deaktivierung_angefordert
-     * beziehungsweise deaktivierung_bestaetigt, jeweils jünger als die
-     * Freigabe. Ein alter Job darf dann keine Veröffentlichung mehr auslösen.
+     * Ob nach dem Freigabezeitpunkt eine Deaktivierung angefordert wurde. Ein
+     * alter Job darf dann keine Veröffentlichung mehr auslösen.
+     *
+     * Prüfbericht 2026-09-12, Befund 2: Die Antwort stammt ausschließlich aus
+     * Nachweisen, nie aus updated_at der Publikation. Ein Rücklesen ohne
+     * Statuswechsel (Scheduler, manuelles Nachlesen) berührt keine Zeile
+     * (beruehre() ohne Zeitstempel) und kann eine Deaktivierung von vor der
+     * Freigabe daher nicht als "nach der Freigabe" erscheinen lassen.
+     *
+     * Quellen:
+     * - zurueckgezogen_at der Publikation jünger als freigegeben_at (Zeitpunkt
+     *   der Anforderung, wird bei jeder neuen Veröffentlichung geleert);
+     * - listing_portal_status_logs mit nach_status deaktivierung_angefordert
+     *   oder zurueckgezogen, created_at jünger als freigegeben_at;
+     * - listing_portal_status_logs mit nach_status deaktivierung_bestaetigt,
+     *   created_at jünger als freigegeben_at, sofern der Wechsel nicht aus
+     *   deaktivierung_angefordert kam. Die Bestätigung einer Anforderung ist
+     *   kein eigener Rückzug: War die Anforderung älter als die Freigabe,
+     *   bleibt die jüngere Freigabe wirksam; war sie jünger, greift bereits
+     *   der Nachweis der Anforderung.
      */
     public function deaktivierungNachFreigabe(Listing $listing, ListingRelease $release): bool
     {
@@ -64,13 +81,26 @@ final class ReleaseGuard
             return false;
         }
 
-        return ListingPortalPublication::query()
+        $rueckzug = ListingPortalPublication::query()
             ->where('listing_id', $listing->getKey())
-            ->where(function ($query) use ($freigegebenAt): void {
-                $query->where('zurueckgezogen_at', '>', $freigegebenAt)
-                    ->orWhere(function ($status) use ($freigegebenAt): void {
-                        $status->whereIn('status', [PortalStatus::DeaktivierungAngefordert->value, PortalStatus::DeaktivierungBestaetigt->value])
-                            ->where('updated_at', '>', $freigegebenAt);
+            ->where('zurueckgezogen_at', '>', $freigegebenAt)
+            ->exists();
+
+        if ($rueckzug) {
+            return true;
+        }
+
+        return ListingPortalStatusLog::query()
+            ->where('listing_id', $listing->getKey())
+            ->where('created_at', '>', $freigegebenAt)
+            ->where(function ($query): void {
+                $query->whereIn('nach_status', [PortalStatus::DeaktivierungAngefordert->value, PortalStatus::Zurueckgezogen->value])
+                    ->orWhere(function ($bestaetigt): void {
+                        $bestaetigt->where('nach_status', PortalStatus::DeaktivierungBestaetigt->value)
+                            ->where(function ($von): void {
+                                $von->whereNull('von_status')
+                                    ->orWhere('von_status', '!=', PortalStatus::DeaktivierungAngefordert->value);
+                            });
                     });
             })
             ->exists();

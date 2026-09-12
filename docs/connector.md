@@ -100,15 +100,16 @@ schreibt nur zugeordnete Felder und löscht nur, was er selbst gesendet hat.
    b) Sonst Suche: `POST search-service/schemas/{schema}` mit Flowdsl `HASFIELDWITHVALUE identifier EQUALS objektnummer`, Größe 2. Treffer werden zusätzlich exakt auf Gleichheit des Feldwerts geprüft. Ein Treffer: ID übernehmen. Mehr als ein Treffer: `sync_status = fehlgeschlagen` mit Meldung "Mehrere Objekte mit dieser Nummer in FLOWFACT, bitte manuell klären", kein Anlegen.
 5. Inhaltsänderung bestimmen: `uebertragener_inhalt_hash` des Links gegen `inhalt_hash` der Freigabeversion.
 6. Anlegen oder Aktualisieren:
-   a) Keine Entität: `POST entity-service/schemas/{schema}` mit `x-ff-version: 2`. Antwort kann Entität oder nur ID sein; beides wird verarbeitet. ID sofort speichern, bevor irgendetwas anderes passiert. `_metadata.lastModifiedTimestamp` (ersatzweise `_metadata.timestamp`) der Antwort wird als `flowfact_last_modified` gespeichert; fehlt beides, entsteht eine Warnung.
-   b) Entität vorhanden und Inhalt geändert (oder `--force`): Konflikterkennung. Weicht der in Schritt 4 gelesene Änderungszeitpunkt vom gespeicherten `flowfact_last_modified` ab, wurde das Objekt in FLOWFACT seit der letzten Übertragung geändert. Einstellung `flowfact.konfliktverhalten` `abbrechen` (Standard): Lauf endet mit "In FLOWFACT wurde das Objekt seit der letzten Übertragung geändert (Zeitpunkt). Bitte prüfen und erneut freigeben." und `sync_status = fehlgeschlagen`, kein PATCH. `ueberschreiben`: PATCH mit Warnung. Ohne gespeicherten oder ohne gelieferten Zeitpunkt findet kein Vergleich statt. Dann `PATCH entity-service/schemas/{schema}/entities/{id}` mit den Feldern; der Zeitpunkt aus der PATCH-Antwort wird gespeichert, bei leerem Körper per GET nachgelesen. Lokal geleerte, zugeordnete Felder werden als `{ "values": [] }` gesendet, aber nur mit Absicht (Abschnitt 4).
+   a) Keine Entität: `POST entity-service/schemas/{schema}` mit `x-ff-version: 2`. Antwort kann Entität oder nur ID sein; beides wird verarbeitet. ID sofort speichern, bevor irgendetwas anderes passiert. `_metadata.lastModifiedTimestamp` (ersatzweise `_metadata.timestamp`) der Antwort wird als `flowfact_last_modified` gespeichert; fehlt beides, entsteht eine Warnung. Entitätsstatus (Prüfbericht 2026-09-12, Befund 10): `status: active`, wenn der handelnde Benutzer das Veröffentlichungsrecht hat; ohne Recht oder ohne handelnden Benutzer wird die Entität mit `status: inactive` angelegt und die Warnung "Entität inaktiv angelegt, da kein Veröffentlichungsrecht" ausgegeben. Der gesendete Status steht in `listing_flowfact_links.flowfact_status`; ein Statuswechsel gilt als Inhaltsänderung (Schritt 5), eine zuletzt aktiv gesendete Entität wird ohne Recht nicht deaktiviert. Ob FLOWFACT eine aktive Entität ohne Portalveröffentlichung eigenständig exportiert, ist am Konto zu verifizieren (flowfact-api.md Abschnitt 9).
+   b) Entität vorhanden und Inhalt geändert (oder `--force`): Konflikterkennung. Weicht der in Schritt 4 gelesene Änderungszeitpunkt vom gespeicherten `flowfact_last_modified` ab, wurde das Objekt in FLOWFACT seit der letzten Übertragung geändert. Einstellung `flowfact.konfliktverhalten` `abbrechen` (Standard): Lauf endet mit "In FLOWFACT wurde das Objekt seit der letzten Übertragung geändert (Zeitpunkt). Bitte prüfen und erneut freigeben." und `sync_status = fehlgeschlagen`, kein PATCH. `ueberschreiben`: PATCH mit Warnung. Ohne gespeicherten oder ohne gelieferten Zeitpunkt findet kein Vergleich statt. Dann `PATCH entity-service/schemas/{schema}/entities/{id}` mit den Feldern; der Zeitpunkt aus der PATCH-Antwort wird gespeichert, bei leerem Körper per GET nachgelesen. Lokal geleerte, zugeordnete Felder werden als `{ "values": [] }` gesendet, aber nur mit Absicht (Abschnitt 4). Nach Anlegen und PATCH wird die tatsächlich gesendete Zuordnung (eigenes Feld => FLOWFACT-Feld) in `listing_flowfact_links.gesendete_felder_json` und an der übertragenen Freigabeversion gespeichert (Prüfbericht 2026-09-12, Befund 5).
 7. Medien abgleichen (MediaSyncService) auf Basis von `medien_json`, Befunde 4 und 6, Masterprompt Abschnitt 14:
-   a) Vorgemerkte Löschungen (`listing_media_deletions`) sowie Medien mit `flowfact_multimedia_id`, die nicht mehr in der Freigabe stehen (aus dem Inserat genommen, Freigabe entzogen, Dokument ohne Freigabe) oder deren Drehung sich gegenüber der zuletzt übertragenen Version geändert hat: `DELETE /items/{id}`, lokale ID leeren.
+   a) Vorgemerkte Löschungen (`listing_media_deletions`) sowie Medien mit `flowfact_multimedia_id`, die nicht mehr in der Freigabe stehen (aus dem Inserat genommen, Freigabe entzogen, Dokument ohne Freigabe) oder deren Drehung sich gegenüber der zuletzt übertragenen Version geändert hat: `DELETE /items/{id}`, lokale ID leeren. Scheitert dieses DELETE mit einem allgemeinen API-Fehler (kein 404, keine Auth- oder Ratenbegrenzung), wird das Item in `listing_media_deletions` zur Löschung vorgemerkt und die lokale ID trotzdem geleert: das aktuelle (gedrehte) Bild wird im selben Lauf hochgeladen, die Löschung beim nächsten Lauf wiederholt; der Lauf endet nicht mit einer veralteten ID (Prüfbericht 2026-09-12, Befund 16). Ist der Link bereits auf der aktuellen Version (erneuter Lauf derselben Freigabe), ist die aktuelle Version selbst der Vergleichsstand; eine ältere Version täuscht sonst eine Drehung vor.
    b) Für jedes freigegebene Medium ohne `flowfact_multimedia_id`: Dateiname deterministisch `<listing uuid>-<media id>-<erste 12 Hex der SHA-256>[-r<Drehung>].<ext>`. Einmal je Lauf und Kategorie `GET /items/entities/{id}?contentCategory=IMAGE|DOCUMENT` lesen; ein Item mit passendem Dateinamen wird übernommen statt erneut hochgeladen. Sonst Presigned-URL holen, Binärdatei per PUT hochladen, Item registrieren (mit `title` aus der Freigabe), ID und `flowfact_titel` speichern, Lease verlängern. Bilder und Grundrisse werden mit eingebrannter Drehung (0, 90, 180, 270 Grad im Uhrzeigersinn) in Portalgröße neu kodiert; die Ausgabe enthält kein EXIF (Test mit APP1-Segment). Dokumente und Energieausweise gehen unverändert in die Dokumentkategorie des Albums; fehlt sie, entsteht die Warnung "Dokument ... wurde nicht übertragen: das FLOWFACT-Album hat keine Kategorie für Dokumente."
    c) Weicht der Titel der Freigabe von `flowfact_titel` ab: `PATCH /items/{id}` mit JSON-Patch (`replace /title`, bei leerem Titel `remove /title`), danach `flowfact_titel` nachführen.
    d) Reihenfolge der Bilder über `PUT /assigned/...` setzen, Titelbild an Position 0: nach jedem Upload, nach jeder Löschung und immer, wenn sich der Inhalts-Hash geändert hat.
 8. Abschluss: `uebertragener_inhalt_hash` = Hash der Freigabe, `release_id` = übertragene Version,
-   `letzte_uebertragung_at`, `sync_status = uebertragen`, Lease freigeben.
+   `letzte_uebertragung_at`, `sync_status = uebertragen`, Lease freigeben. `gesendete_felder_json` und
+   `flowfact_status` wurden bereits in Schritt 6 mit der ID beziehungsweise dem Zeitstempel gespeichert.
 9. Fehler: Bei AuthenticationException `fehlgeschlagen` mit Meldung "Token ungültig oder Rechte fehlen", keine automatische Wiederholung. Bei RateLimitException Job mit Verzögerung neu einreihen. Bei Server- oder Transportfehler bis zu drei Versuche mit Backoff 30, 120, 300 Sekunden; danach `fehlgeschlagen`. In jedem Fehlerfall Lease freigeben und `letzter_fehler` setzen (ohne Token, gekürzt).
 
 Zeitüberschreitung nach einem `POST` zum Anlegen: Die Antwort ist unbekannt, die Entität kann existieren. Beim
@@ -127,8 +128,16 @@ die Version noch die jüngste ist (sonst Eintrag "Veraltete Freigabe übersprung
 API-Aufruf) und ob das Objekt nicht archiviert ist. Ein `TransferListingJob` mit `veroeffentlichen = true`
 (Fortsetzung einer Veröffentlichung nach dem Zeitlimit beim Medienupload) fordert die Veröffentlichung für die
 Portale der Freigabe erst an, wenn die Übertragung vollständig ist und nach der Freigabe keine Deaktivierung
-angefordert wurde (`zurueckgezogen_at` oder Status `deaktivierung_angefordert` jünger als `freigegeben_at`); sonst
-"Deaktivierung nach der Freigabe angefordert, Veröffentlichung übersprungen".
+angefordert wurde; sonst "Deaktivierung nach der Freigabe angefordert, Veröffentlichung übersprungen". Quelle dieser
+Prüfung (Prüfbericht 2026-09-12, Befund 2) sind ausschließlich Nachweise: `zurueckgezogen_at` der Publikation jünger
+als `freigegeben_at`, oder ein Eintrag in `listing_portal_status_logs` mit `nach_status` `deaktivierung_angefordert`
+oder `zurueckgezogen` jünger als `freigegeben_at`, oder `deaktivierung_bestaetigt` jünger als `freigegeben_at`, sofern
+der Wechsel nicht aus `deaktivierung_angefordert` kam (die Bestätigung einer Anforderung von vor der Freigabe ist kein
+neuer Rückzug; kam die Anforderung nach der Freigabe, greift bereits ihr eigener Nachweis). `updated_at` der Publikation
+ist nie Nachweis: `refreshStatus` speichert nur Zeilen mit Statuswechsel regulär, Berührungen (`letzte_pruefung_at` für
+`flow:portal-status`) laufen ohne Zeitstempel und ohne Modellereignisse (`PortalStatusTransition::speichereOhneZeitstempel`).
+Ein früher deaktiviertes Portal, das mit einer neuen Freigabe erneut freigegeben wird, wird daher auch dann
+veröffentlicht, wenn der Scheduler zwischenzeitlich wegen eines anderen aktiven Portals nachgelesen hat.
 
 ## 4. Feldzuordnung
 
@@ -138,10 +147,17 @@ liefert die Werteform `{ feld: { values: [wert] } }`. Ein Feld ohne Zuordnung wi
 
 Geleerte Felder (Prüfbericht 2026-09-11, Befund 5; Masterprompt Abschnitt 23, Löschung nur mit Absicht):
 Zugeordnete Felder, deren Wert in der Freigabe leer ist, liefert der Mapper in `MappedPayload::leereFelder`. Beim
-Anlegen werden sie ausgelassen. Beim PATCH sendet der Sync `{ "values": [] }` ausschließlich für Felder, die mit der
-zuletzt übertragenen Freigabeversion (`listing_flowfact_links.release_id`, ersatzweise die Vorgängerversion)
-tatsächlich gesendet wurden und in der aktuellen Freigabe leer sind (`MappedPayload::loeschungenBeschraenktAuf`).
-Felder, die Müller FLOW nie gesendet hat, werden nie gelöscht; ohne frühere Freigabe gibt es keine Löschbefehle.
+Anlegen werden sie ausgelassen. Beim PATCH sendet der Sync `{ "values": [] }` ausschließlich für FLOWFACT-Felder, die
+Müller FLOW mit der letzten Übertragung tatsächlich mit Wert gesendet hat (`MappedPayload::loeschungenAus`). Quelle ist
+die gespeicherte Zuordnung der letzten Übertragung (`listing_flowfact_links.gesendete_felder_json`, eigenes Feld =>
+FLOWFACT-Feld; ersatzweise die Liste an der zuletzt übertragenen Version `listing_releases.gesendete_felder_json`), nicht
+eine erneute Zuordnung der Vorgängerversion mit der aktuellen Feldzuordnung (Prüfbericht 2026-09-12, Befund 5). Geleert
+wird ein zuvor gesendetes Zielfeld, wenn sein eigenes Feld in der aktuellen Freigabe leer ist (auch wenn die Zuordnung
+inzwischen auf ein anderes Zielfeld zeigt: das alte Zielfeld wird geleert, das neue, nie gesendete erhält keine leere
+Werteliste) oder wenn sein eigenes Feld jetzt mit Wert an ein anderes Zielfeld geht (der alte Wert bliebe sonst
+veraltet stehen). Ein abgeschaltetes Feld (Zuordnung leer) wird weder gesendet noch geleert; FLOWFACT führt es ab dann.
+Felder, die Müller FLOW nie gesendet hat, werden nie gelöscht; ohne frühere Übertragung gibt es keine Löschbefehle. Nur
+für Links aus der Zeit vor der Spalte wird die Vorgängerversion erneut gemappt (dann nur Namen, keine Zuordnung).
 Die Einstellung `flowfact.leere_felder_loeschen` (Standard `true`) schaltet das ab, falls das Konto die leere
 Werteliste anders interpretiert; die genaue Serversemantik ist am Konto zu verifizieren (flowfact-api.md
 Abschnitt 9, Punkt 29).
@@ -158,7 +174,7 @@ enthalten und werden nicht separat übertragen" und führt das Zielfeld unter de
 | objektnummer | identifier | Text |
 | objektart, gewerbe_unterart | estatetype | Code, siehe 4.3 (Gewerbe: Unterart bestimmt den Code) |
 | nutzungsstatus | let | `vermietet` -> `true`, `leerstehend` -> `false`, `anderweitig_belegt` und `unbekannt` werden nicht gesendet |
-| status (immer) | status | `active` |
+| status (immer) | status | `active` mit Veröffentlichungsrecht des handelnden Benutzers; `inactive` beim Anlegen ohne Recht oder ohne Benutzer (Abschnitt 3, Schritt 6a) |
 | strasse, hausnummer, plz, ort, land | addresses | `{ type: "private", street: "Straße Nr", zipcode, city, country: "Deutschland" }`; bei `adress_freigabe = nur_plz_ort` wird das Portal-Flag `showAddress = false` im Publish-Request gesetzt, die Adresse selbst (mit Straße) wird trotzdem übertragen; ob FLOWFACT die Straße dann verbirgt, ist am Konto zu prüfen (Smoke-Test Zeile 15a) |
 | kaufpreis_cent | purchaseprice | Euro als Zahl mit zwei Dezimalstellen |
 | kaltmiete_cent | rent | Euro als Zahl |
@@ -314,8 +330,8 @@ flowfact-api.md dient.
 | flowfact.schema_miete, flowfact.schema_kauf | Text | konkrete Schemanamen des Kontos, Auswahl aus `flow:flowfact:schema` |
 | flowfact.feldzuordnung | JSON | Überschreibung der Feldnamen |
 | flowfact.codezuordnung | JSON | Überschreibung der Codes |
-| flowfact.leere_felder_loeschen | Bool | Standard `true`: geleerte Felder beim PATCH als leere Werteliste senden, nur für zuvor gesendete Felder (Abschnitt 4) |
-| flowfact.konfliktverhalten | Text | `abbrechen` (Standard): Lauf endet mit Fehler, wenn die FLOWFACT-Entität seit der letzten Übertragung geändert wurde; `ueberschreiben`: zugeordnete Felder werden mit Warnung überschrieben (Abschnitt 3, Schritt 6b). `flow:check-config` zeigt den Wert |
+| flowfact.leere_felder_loeschen | Bool | Standard `true`: geleerte Felder beim PATCH als leere Werteliste senden, nur für zuvor gesendete Felder (Abschnitt 4). Im Adminbereich unter FLOWFACT, Übertragungsverhalten, als "Geleerte Felder in FLOWFACT löschen" (an, aus) einstellbar (Prüfbericht 2026-09-12, Befund 14) |
+| flowfact.konfliktverhalten | Text | `abbrechen` (Standard): Lauf endet mit Fehler, wenn die FLOWFACT-Entität seit der letzten Übertragung geändert wurde; `ueberschreiben`: zugeordnete Felder werden mit Warnung überschrieben (Abschnitt 3, Schritt 6b). Im Adminbereich unter FLOWFACT, Übertragungsverhalten, einstellbar; `flow:check-config` zeigt den Wert |
 | flowfact.album_<schema> | JSON | `{ album, bilder, dokumente }`, einmal aus `GET /albums/schemas/{schema}` ermittelt; ohne `dokumente` werden Dokumente nicht übertragen (Warnung) |
 | flowfact.token_hinterlegt_at | Datum | Anzeige im Adminbereich |
 | flowfact.verbindung_geprueft_at, flowfact.verbindung_ergebnis | Text | letzter Verbindungstest über `currentUser` |
@@ -340,6 +356,11 @@ flowfact-api.md dient.
 | Regression/12 Konflikt | Abbruch bei fremder Änderung, Überschreiben per Einstellung, Speichern des Zeitpunkts nach Anlegen und PATCH, Nachlesen bei leerer PATCH-Antwort, Anzeige in flow:check-config |
 | Regression/13 Dokumente | freigegebene Dokumente und Energieausweise unverändert in die Dokumentkategorie, Warnung ohne Kategorie, Löschung nach entzogener Freigabe |
 | Regression/14 Objektartcodes | 02MFH, 03BE, Gewerbe-Unterarten, Lagerwarnung, let, dreiwertige Merkmale mit altem Schlüssel, Adressfreigabe, Stellplatz ohne Code wird abgewiesen und mit Code übertragen |
+| Regression/15 ReleaseGuard | Prüfbericht 2026-09-12, Befund 2: Rücklesen ohne Statuswechsel lässt updated_at unberührt, alte Deaktivierung blockiert die neue Freigabe nicht, Fortsetzungsjob sendet POST /publish ONLINE für beide Portale; Nachweise (Anforderung, zurueckgezogen_at) blockieren weiterhin, Bestätigung einer Anforderung von vor der Freigabe nicht |
+| Regression/16 Gesendete Felder | Befund 5: gespeicherte Zuordnung je Übertragung, geänderte Feldzuordnung leert das tatsächlich gesendete Zielfeld und nie das neue, verschobene Zuordnung, abgeschaltete Zuordnung leert nichts, Rückgriff auf die Liste der Version |
+| Regression/17 Rotation Löschfehler | Befund 16: gescheitertes DELETE merkt das Item vor und lädt das gedrehte Bild hoch, die Vormerkung wird im nächsten Lauf abgearbeitet, erfolgreiches Löschen ohne Vormerkung |
+| Regression/18 Entitätsstatus | Befund 10: inactive ohne Veröffentlichungsrecht oder ohne Benutzer mit Warnung, active mit Recht, Veröffentlichung durch Berechtigten aktiviert vor POST /publish, aktive Entität wird ohne Recht nicht deaktiviert |
+| Admin/FlowfactSettingsTest | Befund 14: Konfliktverhalten und Löschsemantik im Adminbereich, ungültige Werte werden abgewiesen |
 | Unit/ImageResizerTest | Drehung 90/180/270 vor dem Verkleinern, Ausgabe ohne EXIF-APP1-Segment |
 | Console/SchedulerTest, Console/CheckConfigCommandTest | Queue-Worker im Vordergrund, Warteschlangenprüfung meldet gestaute Jobs (Befund 8) |
 

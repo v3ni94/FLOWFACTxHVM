@@ -42,12 +42,20 @@ use Throwable;
  * - Deterministischer Dateiname je Medium; vorhandene Items werden über den
  *   Dateinamen übernommen statt erneut hochgeladen (Befund 6).
  * - Nach jedem Upload wird die Lease über den Herzschlag verlängert (Befund 7).
+ * - Scheitert das Löschen eines zu ersetzenden oder entfernten Items mit
+ *   einem allgemeinen API-Fehler, wird das Item zur Löschung vorgemerkt
+ *   (listing_media_deletions) und die lokale ID geleert: das gedrehte Bild
+ *   wird im selben Lauf hochgeladen, das alte Item beim nächsten Lauf erneut
+ *   gelöscht. Der Lauf endet nicht mit einem veralteten Bild in FLOWFACT
+ *   (Prüfbericht 2026-09-12, Befund 16).
  */
 final class MediaSyncService
 {
     public const string DISK = 'media';
 
     public const string WARNUNG_KEIN_DOKUMENTALBUM = 'Dokument "%s" wurde nicht übertragen: das FLOWFACT-Album hat keine Kategorie für Dokumente.';
+
+    public const string WARNUNG_LOESCHUNG_VORGEMERKT = 'Medium "%s" konnte in FLOWFACT nicht gelöscht werden: %s. Die Löschung wurde vorgemerkt und wird beim nächsten Lauf wiederholt.';
 
     /** @var array<string, array<string, array<string, mixed>>> Items der Entität je Kategorie und ID, einmal je Lauf gelesen */
     private array $items = [];
@@ -318,9 +326,11 @@ final class MediaSyncService
             } catch (AuthenticationException|RateLimitException $exception) {
                 throw $exception;
             } catch (FlowfactException $exception) {
-                $warnungen[] = sprintf('Medium "%s" konnte in FLOWFACT nicht gelöscht werden: %s', $medium->dateiname_original, $exception->getMessage());
-
-                continue;
+                // Befund 16 (Prüfbericht 2026-09-12): Item zur Löschung vormerken
+                // und die ID lösen, damit das aktuelle Bild in diesem Lauf
+                // hochgeladen wird und das alte Item nicht stehen bleibt.
+                $this->merkeLoeschungVor($listing, $itemId);
+                $warnungen[] = sprintf(self::WARNUNG_LOESCHUNG_VORGEMERKT, $medium->dateiname_original, $exception->getMessage());
             }
 
             $medium->flowfact_multimedia_id = null;
@@ -330,6 +340,24 @@ final class MediaSyncService
         }
 
         return $anzahl;
+    }
+
+    private function merkeLoeschungVor(Listing $listing, string $itemId): void
+    {
+        $vorhanden = ListingMediaDeletion::query()
+            ->where('listing_id', $listing->id)
+            ->where('flowfact_multimedia_id', $itemId)
+            ->exists();
+
+        if ($vorhanden) {
+            return;
+        }
+
+        ListingMediaDeletion::query()->create([
+            'listing_id' => $listing->id,
+            'flowfact_multimedia_id' => $itemId,
+            'created_at' => Carbon::now(),
+        ]);
     }
 
     /**

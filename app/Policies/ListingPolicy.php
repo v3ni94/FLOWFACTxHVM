@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Policies;
 
+use App\Enums\ListingStatus;
 use App\Models\Listing;
 use App\Models\User;
 
@@ -48,6 +49,14 @@ class ListingPolicy
     public function update(User $user, Listing $listing): bool
     {
         if (! $user->is_active || $user->isLeser()) {
+            return false;
+        }
+
+        // Prüfbericht 2026-09-12, Befund 9: ein archiviertes Objekt ist ein
+        // eingefrorener Nachweisstand, es gibt keinen Übergang zurück. Weder
+        // Admin noch Mitarbeiter dürfen es über den Assistenten (Schritte,
+        // Autosave) noch ändern.
+        if ($listing->status === ListingStatus::Archiviert) {
             return false;
         }
 

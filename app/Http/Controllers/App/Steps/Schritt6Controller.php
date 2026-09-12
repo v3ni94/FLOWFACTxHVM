@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Http\Controllers\App\Steps;
 
 use App\Enums\MediaTyp;
+use App\Http\Controllers\App\Support\ListingPreviewBuilder;
 use App\Models\Listing;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
@@ -34,9 +35,19 @@ final class Schritt6Controller extends AbstractStep implements StepHandler
 
         $medienNachTyp = $listing->media->groupBy(fn ($medium) => $medium->typ->value);
 
+        // Prüfbericht 2026-09-12, Befund 4: Bildtitel mit Straße oder
+        // Hausnummer trotz eingeschränkter Adressfreigabe bereits hier
+        // sichtbar machen, nicht erst auf der Prüfseite.
+        $adressLeckMedien = $listing->media
+            ->filter(fn ($medium) => $medium->istVeroeffentlichbar() && ListingPreviewBuilder::enthaeltAdresse($listing, $medium->titel))
+            ->pluck('titel')
+            ->values()
+            ->all();
+
         return view('app.listings.schritte.schritt-6', array_merge($this->headerDaten($listing), [
             'kategorien' => MediaTyp::options(),
             'medienNachTyp' => $medienNachTyp,
+            'adressLeckMedien' => $adressLeckMedien,
         ]));
     }
 

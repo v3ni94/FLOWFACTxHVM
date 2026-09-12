@@ -6,7 +6,9 @@
     <div class="page-header">
         <h1>{{ $listing->interne_bezeichnung ?: ($listing->titel ?: $listing->objektnummer) }}</h1>
         <div class="page-actions">
-            <a href="{{ route('app.listings.step', ['listing' => $listing, 'schritt' => 1]) }}" class="btn btn-secondary">Bearbeiten</a>
+            @can('update', $listing)
+                <a href="{{ route('app.listings.step', ['listing' => $listing, 'schritt' => 1]) }}" class="btn btn-secondary">Bearbeiten</a>
+            @endcan
             <a href="{{ route('app.listings.review', $listing) }}" class="btn btn-secondary">Prüfen und veröffentlichen</a>
             <a href="{{ route('app.listings.history', $listing) }}" class="btn btn-ghost">Historie</a>
             @can('duplicate', \App\Models\Listing::class)

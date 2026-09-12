@@ -149,4 +149,24 @@ final class WizardAutosaveTest extends TestCase
 
         self::assertSame(ListingStatus::Entwurf, $listing->fresh()->status);
     }
+
+    /**
+     * Prüfbericht 2026-09-12, Befund 11: eine sehr große Zahl ließ
+     * Money::parse mit einem TypeError abbrechen (Überlauf beim Cast auf
+     * int unter strict_types), die Validierungsregel lieferte dadurch einen
+     * internen Serverfehler statt eines Validierungsfehlers.
+     */
+    public function test_autosave_mit_einem_zu_grossen_betrag_liefert_422_statt_500(): void
+    {
+        $user = User::factory()->create();
+        $listing = Listing::factory()->create(['bearbeiter_user_id' => $user->id, 'erstellt_von_user_id' => $user->id]);
+
+        $response = $this->actingAs($user)->patchJson(
+            route('app.listings.step.autosave', ['listing' => $listing, 'schritt' => 4]),
+            ['kaltmiete' => '99999999999999999999']
+        );
+
+        $response->assertStatus(422);
+        self::assertNull($listing->fresh()->price?->kaltmiete_cent);
+    }
 }

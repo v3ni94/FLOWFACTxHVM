@@ -20,6 +20,7 @@ use App\Http\Requests\Listing\DuplicateListingRequest;
 use App\Models\Listing;
 use App\Models\ListingMedia;
 use App\Models\User;
+use App\Services\Media\MediaUploadService;
 use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -252,7 +253,11 @@ class ListingController extends Controller
             return;
         }
 
-        Storage::disk('media')->copy($original->pfad, $neuerPfad);
+        // Prüfbericht 2026-09-12, Befund 15: die Vorschau wird mitkopiert,
+        // sonst zeigt das Duplikat in Übersicht und Schritt 6 das Original
+        // in voller Größe statt der kleinen Vorschau. Original und Kopie
+        // bleiben unabhängige Dateien.
+        app(MediaUploadService::class)->copyWithPreview($original, $neuerPfad);
 
         $inhalt = Storage::disk('media')->get($neuerPfad) ?? '';
 
@@ -269,6 +274,7 @@ class ListingController extends Controller
             'im_inserat' => $original->im_inserat,
             'freigegeben' => $original->freigegeben,
             'rotation' => $original->rotation,
+            'enthaelt_standortdaten' => $original->enthaelt_standortdaten,
             'flowfact_multimedia_id' => null,
             'pruefsumme_sha256' => hash('sha256', $inhalt),
         ]);

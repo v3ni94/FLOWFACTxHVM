@@ -63,6 +63,15 @@ use Throwable;
  *   offen, wird nicht veröffentlicht; der Job trägt die Freigabeversion und
  *   fordert die Veröffentlichung nach vollständiger Übertragung an, sofern
  *   bis dahin keine Deaktivierung angefordert wurde.
+ *
+ * Nach Prüfbericht 2026-09-12:
+ * - Befund 2: refreshStatus() speichert nur Zeilen mit Statuswechsel regulär;
+ *   Berührungen (letzte_pruefung_at) laufen ohne updated_at, damit der
+ *   ReleaseGuard eine alte Deaktivierung nicht für jünger als eine neue
+ *   Freigabe hält.
+ * - Befund 10: Eine ohne Veröffentlichungsrecht inaktiv angelegte Entität
+ *   gilt vor der Veröffentlichung nicht als aktuell übertragen und wird mit
+ *   dem veröffentlichenden Benutzer erneut übertragen (status active).
  */
 final class FlowfactPublishingService implements PublishingService
 {
@@ -523,7 +532,8 @@ final class FlowfactPublishingService implements PublishingService
         $aktuell = $link !== null
             && $link->flowfact_entity_id !== null
             && $link->sync_status === SyncStatus::Uebertragen
-            && $link->uebertragener_inhalt_hash === $release->inhalt_hash;
+            && $link->uebertragener_inhalt_hash === $release->inhalt_hash
+            && ! $link->inaktivGesendet();
 
         if ($aktuell) {
             return null;
@@ -747,10 +757,16 @@ final class FlowfactPublishingService implements PublishingService
         PortalStatusTransition::apply($publication, PortalStatus::DeaktivierungBestaetigt, PortalStatusTransition::QUELLE_RUECKLESEN_OHNE_EINTRAG, $release);
     }
 
+    /**
+     * Rücklesen ohne Statuswechsel: nur letzte_pruefung_at (Auswahl durch
+     * flow:portal-status), ohne updated_at und ohne Modellereignisse.
+     * Prüfbericht 2026-09-12, Befund 2: updated_at darf keine Deaktivierung
+     * "nach der Freigabe" vortäuschen.
+     */
     private function beruehre(ListingPortalPublication $publication, Carbon $jetzt): void
     {
         $publication->letzte_pruefung_at = $jetzt;
-        $publication->save();
+        PortalStatusTransition::speichereOhneZeitstempel($publication);
     }
 
     /**

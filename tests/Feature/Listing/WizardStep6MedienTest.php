@@ -8,6 +8,7 @@ use App\Models\Listing;
 use App\Models\ListingMedia;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Storage;
 use Tests\TestCase;
 
 /**
@@ -63,5 +64,38 @@ final class WizardStep6MedienTest extends TestCase
 
         $response->assertOk();
         self::assertTrue($response->json('ok'));
+    }
+
+    /**
+     * Prüfbericht 2026-09-12, Befund 1: Schritt 6 muss die Bild- und
+     * Dokumentlinks signieren (wie die Detailseite), sonst antwortet
+     * die Route hinter der signed-Middleware mit 403.
+     */
+    public function test_schritt6_verlinkt_medien_signiert_und_die_links_liefern_200(): void
+    {
+        Storage::fake('media');
+        $user = User::factory()->create();
+        $listing = Listing::factory()->create(['bearbeiter_user_id' => $user->id, 'erstellt_von_user_id' => $user->id]);
+        $bild = ListingMedia::factory()->for($listing)->bild()->create(['dateiname_original' => 'titelbild.jpg']);
+        Storage::disk('media')->put($bild->pfad, 'x');
+        $pdf = ListingMedia::factory()->for($listing)->dokument()->create();
+        Storage::disk('media')->put($pdf->pfad, '%PDF');
+
+        $seite = $this->actingAs($user)->get(route('app.listings.step', ['listing' => $listing, 'schritt' => 6]));
+        $seite->assertOk();
+        $html = $seite->getContent();
+
+        preg_match('#src="([^"]*/medien/'.$bild->id.'/vorschau[^"]*)"#', $html, $m);
+        self::assertNotEmpty($m, 'Bild-URL in Schritt 6 nicht gefunden');
+        $bildUrl = html_entity_decode($m[1]);
+        self::assertStringContainsString('signature=', $bildUrl);
+
+        preg_match('#href="([^"]*/medien/'.$pdf->id.'/original[^"]*)"#', $html, $p);
+        self::assertNotEmpty($p, 'PDF-Link in Schritt 6 nicht gefunden');
+        $pdfUrl = html_entity_decode($p[1]);
+        self::assertStringContainsString('signature=', $pdfUrl);
+
+        $this->actingAs($user)->get($bildUrl)->assertOk();
+        $this->actingAs($user)->get($pdfUrl)->assertOk();
     }
 }
