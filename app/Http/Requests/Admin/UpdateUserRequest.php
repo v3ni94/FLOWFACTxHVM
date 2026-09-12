@@ -28,6 +28,7 @@ class UpdateUserRequest extends FormRequest
             ],
             'role' => ['required', Rule::enum(UserRole::class)],
             'phone' => ['nullable', 'string', 'max:30'],
+            'darf_veroeffentlichen' => ['sometimes', 'boolean'],
         ];
     }
 }

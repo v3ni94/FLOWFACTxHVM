@@ -10,7 +10,10 @@ use App\Http\Controllers\App\ListingMediaController;
 use App\Http\Controllers\App\ListingTextController;
 use App\Http\Controllers\App\ListingWizardController;
 use App\Http\Controllers\App\MediaStreamController;
+use App\Http\Controllers\Auth\ForgotPasswordController;
+use App\Http\Controllers\Auth\InvitationController;
 use App\Http\Controllers\Auth\LoginController;
+use App\Http\Controllers\Auth\ResetPasswordController;
 use App\Http\Controllers\Auth\TwoFactorChallengeController;
 use App\Http\Middleware\EnsureUserIsActive;
 use Illuminate\Support\Facades\Route;
@@ -27,6 +30,16 @@ Route::middleware('guest')->group(function () {
 
     Route::get('/two-factor/challenge', [TwoFactorChallengeController::class, 'create'])->name('two-factor.challenge');
     Route::post('/two-factor/challenge', [TwoFactorChallengeController::class, 'store'])->name('two-factor.challenge.store');
+
+    Route::get('/passwort-vergessen', [ForgotPasswordController::class, 'create'])->name('password.request');
+    Route::post('/passwort-vergessen', [ForgotPasswordController::class, 'store'])->name('password.email');
+    Route::get('/passwort-zuruecksetzen/{token}', [ResetPasswordController::class, 'create'])->name('password.reset');
+    Route::post('/passwort-zuruecksetzen', [ResetPasswordController::class, 'store'])->name('password.update');
+
+    Route::get('/einladung/{token}', [InvitationController::class, 'show'])
+        ->middleware('signed')
+        ->name('invitation.show');
+    Route::post('/einladung/{token}', [InvitationController::class, 'store'])->name('invitation.accept');
 });
 
 Route::middleware(['auth', EnsureUserIsActive::class])->group(function () {
@@ -74,6 +87,10 @@ Route::middleware(['auth', EnsureUserIsActive::class])->group(function () {
         Route::get('/users', [UserController::class, 'index'])->name('users.index');
         Route::get('/users/create', [UserController::class, 'create'])->name('users.create');
         Route::post('/users', [UserController::class, 'store'])->name('users.store');
+        Route::get('/users/invite', [UserController::class, 'invite'])->name('users.invite');
+        Route::post('/users/invite', [UserController::class, 'storeInvitation'])->name('users.invite.store');
+        Route::post('/users/invitations/{invitation}/resend', [UserController::class, 'resendInvitation'])->name('users.invitations.resend');
+        Route::post('/users/invitations/{invitation}/revoke', [UserController::class, 'revokeInvitation'])->name('users.invitations.revoke');
         Route::get('/users/{user}/edit', [UserController::class, 'edit'])->name('users.edit');
         Route::put('/users/{user}', [UserController::class, 'update'])->name('users.update');
         Route::post('/users/{user}/deactivate', [UserController::class, 'deactivate'])->name('users.deactivate');

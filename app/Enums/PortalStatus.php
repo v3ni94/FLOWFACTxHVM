@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace App\Enums;
 
 /**
- * Portalveröffentlichungsstatus (Datenvertrag Abschnitt 4.3).
+ * Portalveröffentlichungsstatus (Datenvertrag Abschnitt 4.3, Masterprompt-Abgleich B.6).
  */
 enum PortalStatus: string
 {
@@ -16,6 +16,15 @@ enum PortalStatus: string
     case Zurueckgezogen = 'zurueckgezogen';
     case Unbekannt = 'unbekannt';
 
+    /**
+     * Fall B: Veröffentlichungsaufruf nicht autorisiert (HTTP 401 oder 403)
+     * oder Portaltyp ohne Unterstützung. Kein Fehler, kein Erfolg: der
+     * Abschluss erfolgt manuell in FLOWFACT.
+     */
+    case ManuelleFreigabeErforderlich = 'manuelle_freigabe_erforderlich';
+    case DeaktivierungAngefordert = 'deaktivierung_angefordert';
+    case DeaktivierungBestaetigt = 'deaktivierung_bestaetigt';
+
     public function label(): string
     {
         return match ($this) {
@@ -25,6 +34,9 @@ enum PortalStatus: string
             self::Fehler => 'Fehler',
             self::Zurueckgezogen => 'Zurückgezogen',
             self::Unbekannt => 'Status nicht ermittelbar',
+            self::ManuelleFreigabeErforderlich => 'Manuelle Freigabe in FLOWFACT erforderlich',
+            self::DeaktivierungAngefordert => 'Deaktivierung angefordert',
+            self::DeaktivierungBestaetigt => 'Deaktivierung bestätigt',
         };
     }
 
@@ -42,10 +54,19 @@ enum PortalStatus: string
     public function badgeClass(): string
     {
         return match ($this) {
-            self::Angefordert, self::Unbekannt => 'badge-warning',
+            self::Angefordert, self::Unbekannt, self::ManuelleFreigabeErforderlich, self::DeaktivierungAngefordert => 'badge-warning',
             self::Aktiv => 'badge-success',
             self::Fehler => 'badge-error',
-            self::NichtVeroeffentlicht, self::Zurueckgezogen => 'badge-neutral',
+            self::NichtVeroeffentlicht, self::Zurueckgezogen, self::DeaktivierungBestaetigt => 'badge-neutral',
         };
+    }
+
+    /**
+     * Ob auf diesem Portal noch eine Veröffentlichung offen ist
+     * (angefordert oder aktiv).
+     */
+    public function istOffen(): bool
+    {
+        return in_array($this, [self::Angefordert, self::Aktiv], true);
     }
 }

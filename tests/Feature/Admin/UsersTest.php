@@ -9,6 +9,7 @@ use App\Enums\UserRole;
 use App\Models\User;
 use App\Policies\UserPolicy;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Tests\TestCase;
 
@@ -141,5 +142,98 @@ class UsersTest extends TestCase
 
         $response->assertRedirect();
         self::assertTrue($admin->refresh()->is_active);
+    }
+
+    /**
+     * Masterprompt Abschnitt 6, Abgleich B.3: "Sperrung eines Benutzers
+     * beendet bestehende Sitzungen". Die Zeile in "sessions" wird hier direkt
+     * eingefügt, weil die Testumgebung den Sitzungstreiber "array" verwendet
+     * (phpunit.xml); die Tabelle selbst existiert unabhängig vom Treiber
+     * bereits durch die Grundmigration.
+     */
+    public function test_die_deaktivierung_loescht_die_sitzungen_des_benutzers(): void
+    {
+        $admin = User::factory()->admin()->create();
+        $target = User::factory()->create();
+
+        DB::table('sessions')->insert([
+            'id' => 'test-sitzung-1',
+            'user_id' => $target->id,
+            'ip_address' => '127.0.0.1',
+            'user_agent' => 'PHPUnit',
+            'payload' => base64_encode(serialize([])),
+            'last_activity' => now()->timestamp,
+        ]);
+
+        self::assertSame(1, DB::table('sessions')->where('user_id', $target->id)->count());
+
+        $response = $this->actingAs($admin)->post('/admin/users/'.$target->id.'/deactivate');
+
+        $response->assertRedirect();
+        self::assertSame(0, DB::table('sessions')->where('user_id', $target->id)->count());
+    }
+
+    public function test_der_letzte_aktive_admin_kann_nicht_zum_leser_herabgestuft_werden(): void
+    {
+        $admin = User::factory()->admin()->create();
+
+        $response = $this->actingAs($admin)->put('/admin/users/'.$admin->id, [
+            'name' => $admin->name,
+            'email' => $admin->email,
+            'role' => UserRole::Leser->value,
+        ]);
+
+        $response->assertSessionHasErrors('role');
+        self::assertSame(UserRole::Admin, $admin->refresh()->role);
+    }
+
+    public function test_ein_admin_kann_einen_benutzer_mit_darf_veroeffentlichen_anlegen(): void
+    {
+        $admin = User::factory()->admin()->create();
+
+        $response = $this->actingAs($admin)->post('/admin/users', [
+            'name' => 'Veröffentlichende Mitarbeiterin',
+            'email' => 'veroeffentlicht@example.test',
+            'role' => UserRole::Mitarbeiter->value,
+            'password' => 'ein-sehr-langes-init-pw',
+            'password_confirmation' => 'ein-sehr-langes-init-pw',
+            'darf_veroeffentlichen' => '1',
+        ]);
+
+        $response->assertRedirect(route('admin.users.index'));
+
+        $user = User::where('email', 'veroeffentlicht@example.test')->firstOrFail();
+        self::assertTrue($user->darf_veroeffentlichen);
+        self::assertTrue($user->kannVeroeffentlichen());
+    }
+
+    public function test_ein_admin_kann_das_recht_darf_veroeffentlichen_wieder_entziehen(): void
+    {
+        $admin = User::factory()->admin()->create();
+        $target = User::factory()->darfVeroeffentlichen()->create();
+
+        $response = $this->actingAs($admin)->put('/admin/users/'.$target->id, [
+            'name' => $target->name,
+            'email' => $target->email,
+            'role' => UserRole::Mitarbeiter->value,
+            // darf_veroeffentlichen bewusst nicht mitgesendet: unchecked Checkbox.
+        ]);
+
+        $response->assertRedirect(route('admin.users.index'));
+        self::assertFalse($target->refresh()->darf_veroeffentlichen);
+    }
+
+    public function test_ein_admin_ist_immer_zur_veroeffentlichung_berechtigt(): void
+    {
+        $admin = User::factory()->admin()->create();
+
+        self::assertTrue($admin->kannVeroeffentlichen());
+    }
+
+    public function test_ein_leser_ist_ohne_das_flag_nicht_zur_veroeffentlichung_berechtigt(): void
+    {
+        $leser = User::factory()->leser()->ohneVeroeffentlichungsrecht()->create();
+
+        self::assertFalse($leser->kannVeroeffentlichen());
     }
 }

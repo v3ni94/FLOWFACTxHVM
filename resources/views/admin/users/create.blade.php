@@ -48,6 +48,15 @@
                     @enderror
                 </div>
 
+                <div class="field-inline @error('darf_veroeffentlichen') has-error @enderror">
+                    <input type="checkbox" id="darf_veroeffentlichen" name="darf_veroeffentlichen" value="1" @checked(old('darf_veroeffentlichen'))>
+                    <label for="darf_veroeffentlichen">Darf veröffentlichen</label>
+                    @error('darf_veroeffentlichen')
+                        <p class="error">{{ $message }}</p>
+                    @enderror
+                </div>
+                <p class="hint">Ein Administrator darf immer veröffentlichen, unabhängig von diesem Recht.</p>
+
                 <div class="field @error('password') has-error @enderror">
                     <label for="password">Initiales Passwort</label>
                     <input type="password" id="password" name="password" required>

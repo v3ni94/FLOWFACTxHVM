@@ -9,12 +9,18 @@ use App\Enums\Ausweistyp;
 use App\Enums\Effizienzklasse;
 use App\Enums\EnergieausweisStatus;
 use App\Enums\Energietraeger;
+use App\Enums\GewerbeUnterart;
+use App\Enums\HeizkostenStruktur;
 use App\Enums\HeizkostenVersorgung;
 use App\Enums\Heizungsart;
+use App\Enums\Nutzungsstatus;
 use App\Enums\Objektart;
 use App\Enums\ProvisionTyp;
+use App\Enums\StellplatzModus;
 use App\Enums\StellplatzTyp;
 use App\Enums\VerfuegbarAbTyp;
+use App\Enums\Waermeabgabe;
+use App\Enums\Warmwasserbereitung;
 use App\Enums\Zustand;
 use BackedEnum;
 
@@ -77,6 +83,18 @@ final class FieldCatalog
         'objektnummer' => ['ziel' => 'identifier', 'label' => 'Objektnummer', 'art' => self::TEXT, 'bereich' => 'listing'],
         'vermarktungsart' => ['ziel' => null, 'label' => 'Vermarktungsart', 'art' => self::ABSICHTLICH, 'bereich' => 'listing'],
         'objektart' => ['ziel' => 'estatetype', 'label' => 'Objektart', 'art' => self::CODE, 'gruppe' => 'objektart', 'bereich' => 'listing'],
+        // Masterprompt-Abgleich B.2 (Welle 1): neue Inseratsfelder ohne bestätigte Zuordnung, Zuordnung folgt in Welle 3.
+        'gewerbe_unterart' => ['ziel' => null, 'label' => 'Gewerbe-Unterart', 'art' => self::CODE, 'gruppe' => 'gewerbe_unterart', 'bereich' => 'listing'],
+        'nutzungsstatus' => ['ziel' => null, 'label' => 'Nutzungsstatus', 'art' => self::CODE, 'gruppe' => 'nutzungsstatus', 'bereich' => 'listing'],
+        'adresszusatz' => ['ziel' => null, 'label' => 'Adresszusatz', 'art' => self::TEXT, 'bereich' => 'listing'],
+        'stadtteil' => ['ziel' => null, 'label' => 'Stadtteil', 'art' => self::TEXT, 'bereich' => 'listing'],
+        // Ableitungsquelle von adresse_im_inserat_anzeigen, wirkt über showAddress.
+        'adress_freigabe' => ['ziel' => null, 'label' => 'Adressfreigabe', 'art' => self::ABSICHTLICH, 'bereich' => 'listing'],
+        'gewerbeflaeche_qm' => ['ziel' => null, 'label' => 'Gewerbefläche', 'art' => self::ZAHL, 'bereich' => 'listing'],
+        'modernisierungsjahr' => ['ziel' => null, 'label' => 'Modernisierungsjahr', 'art' => self::ZAHL, 'bereich' => 'listing'],
+        'heizung_waermeabgabe' => ['ziel' => null, 'label' => 'Wärmeabgabe', 'art' => self::CODE, 'gruppe' => 'heizung_waermeabgabe', 'bereich' => 'listing'],
+        'heizung_warmwasser' => ['ziel' => null, 'label' => 'Warmwasserbereitung', 'art' => self::CODE, 'gruppe' => 'heizung_warmwasser', 'bereich' => 'listing'],
+        'einbaukueche_mitvermietet' => ['ziel' => null, 'label' => 'Einbauküche mitvermietet', 'art' => self::BOOL, 'bereich' => 'listing'],
         'titel' => ['ziel' => 'headline', 'label' => 'Titel', 'art' => self::TEXT, 'bereich' => 'listing'],
         self::ADRESSFELD => ['ziel' => 'addresses', 'label' => 'Adresse (Straße, Hausnummer, PLZ, Ort, Land)', 'art' => self::ADRESSE, 'bereich' => 'listing'],
         'strasse' => ['ziel' => null, 'label' => 'Straße', 'art' => self::ADRESSTEIL, 'bereich' => 'listing'],
@@ -137,6 +155,9 @@ final class FieldCatalog
         'mieteinnahmen_ist_cent' => ['ziel' => null, 'label' => 'Mieteinnahmen (Ist, jährlich)', 'art' => self::EURO, 'bereich' => 'price'],
         'provision_typ' => ['ziel' => null, 'label' => 'Provisionstyp', 'art' => self::CODE, 'gruppe' => 'provision_typ', 'bereich' => 'price'],
         'provision_text' => ['ziel' => null, 'label' => 'Provisionstext', 'art' => self::TEXT, 'bereich' => 'price'],
+        'heizkosten_struktur' => ['ziel' => null, 'label' => 'Heizkostenstruktur', 'art' => self::CODE, 'gruppe' => 'heizkosten_struktur', 'bereich' => 'price'],
+        'stellplatz_modus' => ['ziel' => null, 'label' => 'Stellplatzmodus', 'art' => self::CODE, 'gruppe' => 'stellplatz_modus', 'bereich' => 'price'],
+        'stellplatz_im_kaufpreis' => ['ziel' => null, 'label' => 'Stellplatz im Kaufpreis', 'art' => self::BOOL, 'bereich' => 'price'],
 
         // Energieausweis (listing_energies)
         'energie.status' => ['ziel' => null, 'label' => 'Energieausweis: Status', 'art' => self::CODE, 'gruppe' => 'energie.status', 'bereich' => 'energy'],
@@ -146,6 +167,8 @@ final class FieldCatalog
         'energie.baujahr_anlage' => ['ziel' => null, 'label' => 'Energieausweis: Baujahr Anlage', 'art' => self::ZAHL, 'bereich' => 'energy'],
         'energie.gueltig_bis' => ['ziel' => null, 'label' => 'Energieausweis: Gültig bis', 'art' => self::DATUM, 'bereich' => 'energy'],
         'energie.enthaelt_warmwasser' => ['ziel' => null, 'label' => 'Energieausweis: Enthält Warmwasser', 'art' => self::BOOL, 'bereich' => 'energy'],
+        'energie.ausstellungsdatum' => ['ziel' => null, 'label' => 'Energieausweis: Ausstellungsdatum', 'art' => self::DATUM, 'bereich' => 'energy'],
+        'energie.kennwert_strom_kwh' => ['ziel' => null, 'label' => 'Energieausweis: Kennwert Strom', 'art' => self::ZAHL, 'bereich' => 'energy'],
     ];
 
     /**
@@ -210,6 +233,12 @@ final class FieldCatalog
         'provision_typ' => ProvisionTyp::class,
         'energie.status' => EnergieausweisStatus::class,
         'energie.ausweistyp' => Ausweistyp::class,
+        'gewerbe_unterart' => GewerbeUnterart::class,
+        'nutzungsstatus' => Nutzungsstatus::class,
+        'heizung_waermeabgabe' => Waermeabgabe::class,
+        'heizung_warmwasser' => Warmwasserbereitung::class,
+        'heizkosten_struktur' => HeizkostenStruktur::class,
+        'stellplatz_modus' => StellplatzModus::class,
     ];
 
     /**

@@ -26,6 +26,7 @@ class StoreUserRequest extends FormRequest
             'role' => ['required', Rule::enum(UserRole::class)],
             'phone' => ['nullable', 'string', 'max:30'],
             'password' => ['required', 'string', 'min:12', 'confirmed'],
+            'darf_veroeffentlichen' => ['sometimes', 'boolean'],
         ];
     }
 }

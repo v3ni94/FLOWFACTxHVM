@@ -7,6 +7,12 @@ use App\Flowfact\Client\SettingsTokenProvider;
 use App\Flowfact\Sync\FlowfactPublishingService;
 use App\Flowfact\Sync\NullPublishingService;
 use App\Flowfact\Sync\PublishingService;
+use App\Models\Listing;
+use App\Models\ListingEnergy;
+use App\Models\ListingInternal;
+use App\Models\ListingMedia;
+use App\Models\ListingPrice;
+use App\Observers\ListingChangeObserver;
 use App\Services\Ai\AnthropicTextGenerator;
 use App\Services\Ai\FakeTextGenerator;
 use App\Services\Ai\TextGenerator;
@@ -46,6 +52,12 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
-        //
+        // Änderungshistorie je Feld (Masterprompt-Abgleich B.6). Interne Felder
+        // werden protokolliert, aber nie exportiert.
+        Listing::observe(ListingChangeObserver::class);
+        ListingPrice::observe(ListingChangeObserver::class);
+        ListingEnergy::observe(ListingChangeObserver::class);
+        ListingInternal::observe(ListingChangeObserver::class);
+        ListingMedia::observe(ListingChangeObserver::class);
     }
 }

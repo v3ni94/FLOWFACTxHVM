@@ -4,17 +4,23 @@ declare(strict_types=1);
 
 namespace Database\Factories;
 
+use App\Enums\AdressFreigabe;
 use App\Enums\Ausstattungsqualitaet;
 use App\Enums\Ausweistyp;
 use App\Enums\Effizienzklasse;
 use App\Enums\EnergieausweisStatus;
 use App\Enums\Energietraeger;
+use App\Enums\GewerbeUnterart;
+use App\Enums\HeizkostenStruktur;
 use App\Enums\HeizkostenVersorgung;
 use App\Enums\Heizungsart;
 use App\Enums\ListingStatus;
 use App\Enums\MediaTyp;
+use App\Enums\Nutzungsstatus;
 use App\Enums\Objektart;
 use App\Enums\ProvisionTyp;
+use App\Enums\StellplatzModus;
+use App\Enums\StellplatzTyp;
 use App\Enums\VerfuegbarAbTyp;
 use App\Enums\Vermarktungsart;
 use App\Enums\Zustand;
@@ -40,15 +46,22 @@ class ListingFactory extends Factory
         return [
             'vermarktungsart' => Vermarktungsart::Miete,
             'objektart' => Objektart::Wohnung,
+            'gewerbe_unterart' => null,
+            'nutzungsstatus' => Nutzungsstatus::Leerstehend,
             'titel' => 'Gepflegte 3-Zimmer-Wohnung in Erkelenz',
+            'interne_bezeichnung' => null,
             'strasse' => 'Kölner Straße',
             'hausnummer' => (string) fake()->numberBetween(1, 199),
+            'adresszusatz' => null,
             'plz' => '41812',
             'ort' => 'Erkelenz',
+            'stadtteil' => null,
             'land' => 'DE',
             'adresse_im_inserat_anzeigen' => true,
+            'adress_freigabe' => fn (array $attributes): AdressFreigabe => AdressFreigabe::ausAnzeigen((bool) ($attributes['adresse_im_inserat_anzeigen'] ?? true)),
             'wohnflaeche_qm' => 65.00,
             'nutzflaeche_qm' => null,
+            'gewerbeflaeche_qm' => null,
             'grundstuecksflaeche_qm' => null,
             'zimmer' => 3.0,
             'schlafzimmer' => 2,
@@ -56,11 +69,14 @@ class ListingFactory extends Factory
             'etage' => 2,
             'etagen_gesamt' => 4,
             'baujahr' => 1998,
+            'modernisierungsjahr' => null,
             'zustand' => Zustand::Gepflegt,
             'ausstattungsqualitaet' => Ausstattungsqualitaet::Normal,
             'heizungsart' => Heizungsart::Zentralheizung,
             'energietraeger' => Energietraeger::Gas,
             'heizkosten_versorgung' => HeizkostenVersorgung::Zentral,
+            'heizung_waermeabgabe' => null,
+            'heizung_warmwasser' => null,
             'verfuegbar_ab_typ' => VerfuegbarAbTyp::Sofort,
             'verfuegbar_ab_datum' => null,
             'ausstattung' => [
@@ -76,6 +92,7 @@ class ListingFactory extends Factory
                 'wg_geeignet' => false,
                 'haustiere_erlaubt' => false,
             ],
+            'einbaukueche_mitvermietet' => null,
             'stellplatz_typ' => null,
             'stellplatz_anzahl' => null,
             'beschreibung_objekt' => null,
@@ -102,6 +119,111 @@ class ListingFactory extends Factory
             'vermarktungsart' => Vermarktungsart::Kauf,
             'heizkosten_versorgung' => null,
         ]);
+    }
+
+    /**
+     * Gewerbeobjekt (Büro): Gewerbe- und Nutzfläche statt Wohnfläche, keine
+     * Zimmer (Masterprompt-Abgleich B.2).
+     */
+    public function gewerbe(GewerbeUnterart $unterart = GewerbeUnterart::Buero): static
+    {
+        return $this->state(fn (array $attributes): array => [
+            'objektart' => Objektart::Gewerbe,
+            'gewerbe_unterart' => $unterart,
+            'titel' => 'Helle Bürofläche in Erkelenz',
+            'wohnflaeche_qm' => null,
+            'nutzflaeche_qm' => 120.00,
+            'gewerbeflaeche_qm' => 120.00,
+            'zimmer' => null,
+            'schlafzimmer' => null,
+            'badezimmer' => null,
+            'ausstattung' => [],
+        ]);
+    }
+
+    /**
+     * Mehrfamilienhaus: Wohnfläche gesamt und Grundstück, keine Etage einer
+     * einzelnen Einheit.
+     */
+    public function mehrfamilienhaus(): static
+    {
+        return $this->state(fn (array $attributes): array => [
+            'objektart' => Objektart::Mehrfamilienhaus,
+            'titel' => 'Mehrfamilienhaus mit sechs Einheiten in Erkelenz',
+            'wohnflaeche_qm' => 420.00,
+            'grundstuecksflaeche_qm' => 650.00,
+            'zimmer' => null,
+            'schlafzimmer' => null,
+            'badezimmer' => null,
+            'etage' => null,
+            'etagen_gesamt' => 3,
+        ]);
+    }
+
+    /**
+     * Grundstück: nur Grundstücksfläche, kein Energieausweis, keine Heizung.
+     */
+    public function grundstueck(): static
+    {
+        return $this->state(fn (array $attributes): array => [
+            'objektart' => Objektart::Grundstueck,
+            'titel' => 'Baugrundstück in Erkelenz',
+            'wohnflaeche_qm' => null,
+            'nutzflaeche_qm' => null,
+            'grundstuecksflaeche_qm' => 800.00,
+            'zimmer' => null,
+            'schlafzimmer' => null,
+            'badezimmer' => null,
+            'etage' => null,
+            'etagen_gesamt' => null,
+            'baujahr' => null,
+            'zustand' => null,
+            'ausstattungsqualitaet' => null,
+            'heizungsart' => null,
+            'energietraeger' => null,
+            'ausstattung' => [],
+        ]);
+    }
+
+    /**
+     * Stellplatz: kein Energieausweis, keine Flächen, keine Zimmer.
+     */
+    public function stellplatz(): static
+    {
+        return $this->state(fn (array $attributes): array => [
+            'objektart' => Objektart::Stellplatz,
+            'titel' => 'Tiefgaragenstellplatz in Erkelenz',
+            'wohnflaeche_qm' => null,
+            'nutzflaeche_qm' => null,
+            'grundstuecksflaeche_qm' => null,
+            'zimmer' => null,
+            'schlafzimmer' => null,
+            'badezimmer' => null,
+            'etage' => null,
+            'etagen_gesamt' => null,
+            'baujahr' => null,
+            'zustand' => null,
+            'ausstattungsqualitaet' => null,
+            'heizungsart' => null,
+            'energietraeger' => null,
+            'ausstattung' => [],
+            'stellplatz_typ' => StellplatzTyp::Tiefgarage,
+            'stellplatz_anzahl' => 1,
+        ]);
+    }
+
+    /**
+     * Vermietetes Objekt zum Verkauf (Masterprompt-Abgleich B.1 Schritt 1):
+     * Kauf mit Nutzungsstatus vermietet und Ist-Mieteinnahmen.
+     */
+    public function vermietetZumVerkauf(): static
+    {
+        return $this->kauf()->state(fn (array $attributes): array => [
+            'nutzungsstatus' => Nutzungsstatus::Vermietet,
+        ])->afterCreating(function (Listing $listing): void {
+            $this->erzeugePreise($listing);
+            $listing->price()->update(['mieteinnahmen_ist_cent' => 9_600_00]);
+        });
     }
 
     /**
@@ -170,7 +292,9 @@ class ListingFactory extends Factory
             $listing->price()->create([
                 'kaufpreis_cent' => 32_500_00,
                 'hausgeld_cent' => 25_000,
+                'stellplatz_modus' => StellplatzModus::Keiner,
                 'provision_typ' => ProvisionTyp::Provisionsfrei,
+                'provision_bestaetigt' => false,
             ]);
 
             return;
@@ -181,9 +305,14 @@ class ListingFactory extends Factory
             'nebenkosten_cent' => 20_000,
             'heizkosten_cent' => 10_000,
             'heizkosten_in_nebenkosten_enthalten' => false,
+            'heizkosten_struktur' => $listing->heizkosten_versorgung === HeizkostenVersorgung::Dezentral
+                ? HeizkostenStruktur::EigenerVertrag
+                : HeizkostenStruktur::Zusaetzlich,
             'warmmiete_cent' => 110_000,
             'kaution_cent' => 240_000,
+            'stellplatz_modus' => StellplatzModus::Keiner,
             'provision_typ' => ProvisionTyp::Provisionsfrei,
+            'provision_bestaetigt' => false,
         ]);
     }
 

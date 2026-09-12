@@ -49,6 +49,27 @@
                     @enderror
                 </div>
 
+                <div class="field-inline @error('darf_veroeffentlichen') has-error @enderror">
+                    <input type="checkbox" id="darf_veroeffentlichen" name="darf_veroeffentlichen" value="1" @checked(old('darf_veroeffentlichen', $editUser->darf_veroeffentlichen))>
+                    <label for="darf_veroeffentlichen">Darf veröffentlichen</label>
+                    @error('darf_veroeffentlichen')
+                        <p class="error">{{ $message }}</p>
+                    @enderror
+                </div>
+                <p class="hint">Ein Administrator darf immer veröffentlichen, unabhängig von diesem Recht.</p>
+
+                <div class="field">
+                    <span class="hint">
+                        Status:
+                        @if ($editUser->is_active)
+                            <span class="badge badge-success">Aktiv</span>
+                        @else
+                            <span class="badge badge-error">Deaktiviert</span>
+                        @endif
+                        · Letzte Anmeldung: {{ $editUser->last_login_at?->format('d.m.Y H:i') ?? 'noch nie' }}
+                    </span>
+                </div>
+
                 <div class="cluster">
                     <button type="submit" class="btn btn-primary">Speichern</button>
                     <a href="{{ route('admin.users.index') }}" class="btn btn-ghost">Abbrechen</a>

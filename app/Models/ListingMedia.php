@@ -12,7 +12,16 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 /**
- * Medien eines Objekts (Datenvertrag Abschnitt 2.6).
+ * Medien eines Objekts (Datenvertrag Abschnitt 2.6, Masterprompt-Abgleich B.2).
+ *
+ * @property int $listing_id
+ * @property MediaTyp $typ
+ * @property int $sortierung
+ * @property string|null $titel
+ * @property bool $im_inserat
+ * @property bool $freigegeben
+ * @property int $rotation
+ * @property string $pruefsumme_sha256
  */
 class ListingMedia extends Model
 {
@@ -33,7 +42,26 @@ class ListingMedia extends Model
             'hoehe' => 'integer',
             'sortierung' => 'integer',
             'im_inserat' => 'boolean',
+            'freigegeben' => 'boolean',
+            'rotation' => 'integer',
         ];
+    }
+
+    protected static function booted(): void
+    {
+        // Freigabe je Medium (Masterprompt-Abgleich B.2): Bilder und Grundrisse
+        // sind beim Anlegen freigegeben, Dokumente und Energieausweise bleiben
+        // intern, bis sie ausdrücklich freigegeben werden.
+        static::creating(function (ListingMedia $medium): void {
+            if ($medium->getAttribute('freigegeben') === null) {
+                $typ = $medium->typ instanceof MediaTyp ? $medium->typ : MediaTyp::tryFrom((string) $medium->typ);
+                $medium->freigegeben = $typ?->standardFreigegeben() ?? false;
+            }
+
+            if ($medium->getAttribute('rotation') === null) {
+                $medium->rotation = 0;
+            }
+        });
     }
 
     /**
@@ -60,6 +88,24 @@ class ListingMedia extends Model
     public function scopeImInserat(Builder $query): Builder
     {
         return $query->where('im_inserat', true);
+    }
+
+    /**
+     * @param  Builder<ListingMedia>  $query
+     * @return Builder<ListingMedia>
+     */
+    public function scopeFreigegeben(Builder $query): Builder
+    {
+        return $query->where('freigegeben', true);
+    }
+
+    /**
+     * Ob das Medium in eine Freigabeversion und in die Übertragung gehört:
+     * im Inserat und freigegeben.
+     */
+    public function istVeroeffentlichbar(): bool
+    {
+        return $this->im_inserat && $this->freigegeben;
     }
 
     /**

@@ -36,6 +36,20 @@ class UserFactory extends Factory
             'role' => UserRole::Mitarbeiter,
             'is_active' => true,
             'phone' => null,
+            // ÜBERGANGSREGEL (Masterprompt Abschnitt 6, Abgleich B.3,
+            // Rückwärtskompatibilität dieser Welle): Die Datenbankspalte
+            // selbst hat den Standardwert false (Migration
+            // add_darf_veroeffentlichen_to_users_table). Diese Fabrik setzt
+            // testweise true, weil der bestehende, in dieser Welle
+            // unveränderte Assistent (app/Http/Controllers/App/**,
+            // app/Flowfact/Sync/FlowfactPublishingService) schon vor dieser
+            // Welle jedem aktiven Mitarbeiter das Veröffentlichen und
+            // Zurückziehen erlaubte und dessen bestehende Tests einen
+            // einfachen Fabrik-Benutzer ohne Kenntnis dieses neuen Rechts
+            // dafür verwenden. Tests, die die Einschränkung selbst prüfen,
+            // setzen das Recht ausdrücklich auf false (siehe
+            // ohneVeroeffentlichungsrecht() unten).
+            'darf_veroeffentlichen' => true,
         ];
     }
 
@@ -53,6 +67,27 @@ class UserFactory extends Factory
     {
         return $this->state(fn (array $attributes) => [
             'role' => UserRole::Admin,
+        ]);
+    }
+
+    public function leser(): static
+    {
+        return $this->state(fn (array $attributes) => [
+            'role' => UserRole::Leser,
+        ]);
+    }
+
+    public function darfVeroeffentlichen(): static
+    {
+        return $this->state(fn (array $attributes) => [
+            'darf_veroeffentlichen' => true,
+        ]);
+    }
+
+    public function ohneVeroeffentlichungsrecht(): static
+    {
+        return $this->state(fn (array $attributes) => [
+            'darf_veroeffentlichen' => false,
         ]);
     }
 

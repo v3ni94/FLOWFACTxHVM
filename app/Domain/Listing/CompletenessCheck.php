@@ -5,22 +5,37 @@ declare(strict_types=1);
 namespace App\Domain\Listing;
 
 use App\Enums\MediaTyp;
+use App\Enums\MerkmalWert;
+use App\Enums\Nutzungsstatus;
 use App\Enums\Objektart;
 use App\Enums\ProvisionTyp;
+use App\Enums\StellplatzModus;
 use App\Enums\VerfuegbarAbTyp;
 use App\Enums\Vermarktungsart;
 use App\Models\Listing;
+use App\Models\ListingMedia;
 
 /**
- * Vollständigkeitsprüfung vor dem Statuswechsel nach "bereit"
- * (Datenvertrag Abschnitt 4.1: Titel, Adresse, Flächen und Zimmer je
- * Objektart, Preise je Vermarktungsart, Energieausweisstatus, mindestens ein
- * Bild, Beschreibung, Ansprechpartner).
+ * Vollständigkeitsprüfung vor "bereit" und vor der Veröffentlichung
+ * (Datenvertrag Abschnitt 4.1, Masterprompt-Abgleich B.4).
+ *
+ * befunde() liefert je Befund Feld, Ebene (intern, flowfact, portal,
+ * gesetzlich), Art (blockierend, hinweis) und den Schritt des Assistenten
+ * (B.1). check() bleibt als Sicht auf dieselben Befunde erhalten: fehlend
+ * enthält die blockierenden Befunde (Feldschlüssel => Label), hinweise die
+ * Meldungen der vor Veröffentlichung zu bestätigenden Hinweise (Datenvertrag
+ * Abschnitt 3). Rein informative Hinweise (unbekannte Merkmale, fehlende
+ * Lagebeschreibung) stehen nur in befunde().
  */
 final class CompletenessCheck
 {
+    public const string HINWEIS_VERMIETET = 'Das Objekt ist vermietet. Es darf in den Texten nicht als bezugsfrei beschrieben werden.';
+
+    public const string HINWEIS_STELLPLATZ_OHNE_MODUS = 'Es ist ein Stellplatzbetrag erfasst, aber der Stellplatzmodus steht auf "kein Stellplatz". Bitte den Modus prüfen.';
+
     public function __construct(
         private readonly RentCalculator $rentCalculator = new RentCalculator,
+        private readonly EnergyRequirements $energyRequirements = new EnergyRequirements,
     ) {}
 
     public function check(Listing $listing): CompletenessResult
@@ -28,176 +43,267 @@ final class CompletenessCheck
         $fehlend = [];
         $hinweise = [];
 
-        $this->pruefeGrunddaten($listing, $fehlend);
-        $this->pruefeFlaechenUndZimmer($listing, $fehlend);
-        $this->pruefeVerfuegbarkeit($listing, $fehlend);
-        $this->pruefePreise($listing, $fehlend, $hinweise);
-        $this->pruefeEnergieausweis($listing, $fehlend);
-        $this->pruefeMedien($listing, $fehlend);
+        foreach ($this->befunde($listing) as $befund) {
+            if ($befund->istBlockierend()) {
+                $fehlend[$befund->feld] ??= $befund->label;
 
-        if (empty($listing->beschreibung_objekt)) {
-            $fehlend['beschreibung_objekt'] = 'Objektbeschreibung';
+                continue;
+            }
+
+            if ($befund->bestaetigungspflichtig) {
+                $hinweise[] = $befund->meldung;
+            }
         }
 
+        return new CompletenessResult($fehlend, array_values(array_unique($hinweise)));
+    }
+
+    public function blockiert(Listing $listing): bool
+    {
+        foreach ($this->befunde($listing) as $befund) {
+            if ($befund->istBlockierend()) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * @return list<Befund>
+     */
+    public function befunde(Listing $listing): array
+    {
+        $befunde = [];
+
+        $this->pruefeGrunddaten($listing, $befunde);
+        $this->pruefeAdresse($listing, $befunde);
+        $this->pruefeFlaechenUndZimmer($listing, $befunde);
+        $this->pruefePreise($listing, $befunde);
+        $this->pruefeMerkmale($listing, $befunde);
+
+        foreach ($this->energyRequirements->pruefe($listing) as $befund) {
+            $befunde[] = $befund;
+        }
+
+        $this->pruefeMedien($listing, $befunde);
+        $this->pruefeTexte($listing, $befunde);
+
+        return $befunde;
+    }
+
+    /**
+     * @param  list<Befund>  $befunde
+     */
+    private function pruefeGrunddaten(Listing $listing, array &$befunde): void
+    {
         if ($listing->ansprechpartner_user_id === null) {
-            $fehlend['ansprechpartner_user_id'] = 'Ansprechpartner';
-        }
-
-        return new CompletenessResult($fehlend, $hinweise);
-    }
-
-    /**
-     * @param  array<string, string>  $fehlend
-     */
-    private function pruefeGrunddaten(Listing $listing, array &$fehlend): void
-    {
-        if (empty($listing->titel)) {
-            $fehlend['titel'] = 'Titel';
-        }
-
-        if (empty($listing->strasse)) {
-            $fehlend['strasse'] = 'Straße';
-        }
-
-        if (empty($listing->hausnummer)) {
-            $fehlend['hausnummer'] = 'Hausnummer';
-        }
-
-        if (empty($listing->plz)) {
-            $fehlend['plz'] = 'Postleitzahl';
-        }
-
-        if (empty($listing->ort)) {
-            $fehlend['ort'] = 'Ort';
-        }
-    }
-
-    /**
-     * @param  array<string, string>  $fehlend
-     */
-    private function pruefeFlaechenUndZimmer(Listing $listing, array &$fehlend): void
-    {
-        $objektart = $listing->objektart;
-
-        if (in_array($objektart, [Objektart::Wohnung, Objektart::Haus], true)) {
-            if ($listing->wohnflaeche_qm === null) {
-                $fehlend['wohnflaeche_qm'] = 'Wohnfläche';
-            }
-
-            if ($listing->zimmer === null) {
-                $fehlend['zimmer'] = 'Zimmer';
-            }
-        }
-
-        if ($objektart === Objektart::Gewerbe && $listing->nutzflaeche_qm === null) {
-            $fehlend['nutzflaeche_qm'] = 'Nutzfläche';
-        }
-
-        if (in_array($objektart, [Objektart::Haus, Objektart::Grundstueck], true) && $listing->grundstuecksflaeche_qm === null) {
-            $fehlend['grundstuecksflaeche_qm'] = 'Grundstücksfläche';
-        }
-    }
-
-    /**
-     * @param  array<string, string>  $fehlend
-     */
-    private function pruefeVerfuegbarkeit(Listing $listing, array &$fehlend): void
-    {
-        if ($listing->vermarktungsart === Vermarktungsart::Miete && $listing->heizkosten_versorgung === null) {
-            $fehlend['heizkosten_versorgung'] = 'Heizkostenversorgung';
+            $befunde[] = Befund::blockierend('ansprechpartner_user_id', 'Ansprechpartner', 1);
         }
 
         if ($listing->verfuegbar_ab_typ === null) {
-            $fehlend['verfuegbar_ab_typ'] = 'Verfügbarkeit';
-
-            return;
+            $befunde[] = Befund::blockierend('verfuegbar_ab_typ', 'Verfügbarkeit', 1);
+        } elseif ($listing->verfuegbar_ab_typ === VerfuegbarAbTyp::Datum && $listing->verfuegbar_ab_datum === null) {
+            $befunde[] = Befund::blockierend('verfuegbar_ab_datum', 'Verfügbar ab (Datum)', 1);
         }
 
-        if ($listing->verfuegbar_ab_typ === VerfuegbarAbTyp::Datum && $listing->verfuegbar_ab_datum === null) {
-            $fehlend['verfuegbar_ab_datum'] = 'Verfügbar ab (Datum)';
+        if ($listing->vermarktungsart === Vermarktungsart::Kauf && $listing->nutzungsstatus === Nutzungsstatus::Vermietet) {
+            $befunde[] = Befund::hinweis('nutzungsstatus', 'Nutzungsstatus', 1, self::HINWEIS_VERMIETET, bestaetigungspflichtig: true);
         }
     }
 
     /**
-     * @param  array<string, string>  $fehlend
-     * @param  array<int, string>  $hinweise
+     * @param  list<Befund>  $befunde
      */
-    private function pruefePreise(Listing $listing, array &$fehlend, array &$hinweise): void
+    private function pruefeAdresse(Listing $listing, array &$befunde): void
+    {
+        foreach (['strasse' => 'Straße', 'hausnummer' => 'Hausnummer', 'plz' => 'Postleitzahl', 'ort' => 'Ort'] as $feld => $label) {
+            if (empty($listing->{$feld})) {
+                $befunde[] = Befund::blockierend($feld, $label, 2);
+            }
+        }
+    }
+
+    /**
+     * Feldgruppen je Objektart (Objektart::benoetigt, Masterprompt-Abgleich B.1 Schritt 3).
+     *
+     * @param  list<Befund>  $befunde
+     */
+    private function pruefeFlaechenUndZimmer(Listing $listing, array &$befunde): void
+    {
+        $objektart = $listing->objektart;
+
+        if ($objektart->benoetigt('wohnflaeche') && $listing->wohnflaeche_qm === null) {
+            $befunde[] = Befund::blockierend('wohnflaeche_qm', 'Wohnfläche', 3);
+        }
+
+        if ($objektart->benoetigt('zimmer') && $listing->zimmer === null) {
+            $befunde[] = Befund::blockierend('zimmer', 'Zimmer', 3);
+        }
+
+        if ($objektart->benoetigt('grundstueck') && $listing->grundstuecksflaeche_qm === null) {
+            $befunde[] = Befund::blockierend('grundstuecksflaeche_qm', 'Grundstücksfläche', 3);
+        }
+
+        // Gewerbe: Gewerbefläche, ersatzweise die Nutzfläche des bisherigen
+        // Assistenten (Datenvertrag Abschnitt 2.2).
+        if ($objektart->benoetigt('gewerbeflaeche') && $listing->gewerbeflaeche_qm === null && $listing->nutzflaeche_qm === null) {
+            $befunde[] = Befund::blockierend('gewerbeflaeche_qm', 'Gewerbefläche', 3, 'Gewerbefläche oder Nutzfläche fehlt.');
+        }
+    }
+
+    /**
+     * @param  list<Befund>  $befunde
+     */
+    private function pruefePreise(Listing $listing, array &$befunde): void
     {
         $preis = $listing->price;
 
         if ($listing->vermarktungsart === Vermarktungsart::Miete) {
+            $struktur = PriceStructure::ermittle($listing);
+
+            if ($struktur === null) {
+                $befunde[] = Befund::blockierend('heizkosten_versorgung', 'Heizkostenstruktur', 4, 'Die Kostenstruktur der Heizkosten fehlt (enthalten, zusätzlich oder eigener Versorgungsvertrag).');
+            }
+
             if ($preis === null || $preis->kaltmiete_cent === null) {
-                $fehlend['preis.kaltmiete_cent'] = 'Kaltmiete';
+                $befunde[] = Befund::blockierend('preis.kaltmiete_cent', 'Kaltmiete', 4);
             }
 
             if ($preis === null || $preis->nebenkosten_cent === null) {
-                $fehlend['preis.nebenkosten_cent'] = 'Nebenkosten';
+                $befunde[] = Befund::blockierend('preis.nebenkosten_cent', 'Nebenkosten', 4);
             }
 
-            if ($preis !== null
-                && $preis->kaltmiete_cent !== null
-                && $preis->nebenkosten_cent !== null
-                && $listing->heizkosten_versorgung !== null
-            ) {
+            if ($preis !== null && $preis->kaltmiete_cent !== null && $preis->nebenkosten_cent !== null && $struktur !== null) {
                 try {
                     $ergebnis = $this->rentCalculator->calculate(
                         kaltmieteCent: $preis->kaltmiete_cent,
                         nebenkostenCent: $preis->nebenkosten_cent,
                         heizkostenCent: $preis->heizkosten_cent,
-                        heizkostenInNebenkostenEnthalten: $preis->heizkosten_in_nebenkosten_enthalten,
-                        versorgung: $listing->heizkosten_versorgung,
+                        heizkostenInNebenkostenEnthalten: PriceStructure::heizkostenEnthalten($struktur),
+                        versorgung: PriceStructure::versorgung($struktur),
                     );
 
                     foreach ($ergebnis->hinweise as $hinweis) {
-                        $hinweise[] = $hinweis->label();
+                        $befunde[] = Befund::hinweis('preis.warmmiete_cent', 'Warmmiete', 4, $hinweis->label(), bestaetigungspflichtig: true);
                     }
                 } catch (InvalidRentInputException) {
-                    // Prüfbericht 2026-09-11, Befund 2: Schritt 2 kann die
-                    // Heizkostenversorgung unabhängig von Schritt 4 ändern und
-                    // dabei widersprüchliche Preisangaben hinterlassen. Die
-                    // Vollständigkeitsprüfung darf dadurch nie eine Ausnahme
-                    // werfen (sonst 500 auf Detailseite, allen Schritten und
-                    // der Veröffentlichung), sondern meldet das als fehlendes
-                    // Feld; CompletenessFieldMap verweist dafür auf Schritt 4.
-                    $fehlend['preis.widerspruch'] = 'Preisangaben widersprüchlich';
+                    // Prüfbericht 2026-09-11, Befund 2: widersprüchliche
+                    // Preisangaben dürfen die Prüfung nie mit einer Ausnahme
+                    // abbrechen, sondern werden als blockierender Befund gemeldet.
+                    $befunde[] = Befund::blockierend('preis.widerspruch', 'Preisangaben widersprüchlich', 4, 'Die Preisangaben widersprechen der Heizkostenstruktur. Bitte die Preise erneut speichern.');
                 }
             }
         }
 
-        if ($listing->vermarktungsart === Vermarktungsart::Kauf) {
-            if ($preis === null || $preis->kaufpreis_cent === null) {
-                $fehlend['preis.kaufpreis_cent'] = 'Kaufpreis';
+        if ($listing->vermarktungsart === Vermarktungsart::Kauf && ($preis === null || $preis->kaufpreis_cent === null)) {
+            $befunde[] = Befund::blockierend('preis.kaufpreis_cent', 'Kaufpreis', 4);
+        }
+
+        if ($preis === null) {
+            return;
+        }
+
+        if ($preis->provision_typ === ProvisionTyp::Provisionspflichtig) {
+            if (empty($preis->provision_text)) {
+                $befunde[] = Befund::blockierend('preis.provision_text', 'Provisionstext', 4);
+            }
+
+            if (! $preis->provision_bestaetigt) {
+                $befunde[] = Befund::blockierend('preis.provision_bestaetigt', 'Provisionsbestätigung', 4, 'Die Provisionsangabe muss vor der Veröffentlichung ausdrücklich bestätigt werden.');
             }
         }
 
-        if ($preis !== null && $preis->provision_typ === ProvisionTyp::Provisionspflichtig && empty($preis->provision_text)) {
-            $fehlend['preis.provision_text'] = 'Provisionstext';
+        $this->pruefeStellplatz($listing, $befunde);
+    }
+
+    /**
+     * @param  list<Befund>  $befunde
+     */
+    private function pruefeStellplatz(Listing $listing, array &$befunde): void
+    {
+        $preis = $listing->price;
+        $modus = $preis->stellplatz_modus ?? StellplatzModus::Keiner;
+        $istMiete = $listing->vermarktungsart === Vermarktungsart::Miete;
+
+        try {
+            PriceStructure::pruefeStellplatz($modus, $preis->stellplatz_miete_cent, $preis->stellplatz_kaufpreis_cent);
+        } catch (InvalidRentInputException $exception) {
+            $befunde[] = Befund::blockierend('preis.stellplatz_widerspruch', 'Stellplatzangaben widersprüchlich', 4, $exception->getMessage());
+
+            return;
+        }
+
+        if ($modus->verlangtBetrag()) {
+            if ($istMiete && ($preis->stellplatz_miete_cent === null || $preis->stellplatz_miete_cent <= 0)) {
+                $befunde[] = Befund::blockierend('preis.stellplatz_miete_cent', 'Stellplatzmiete', 4, 'Für den gewählten Stellplatzmodus fehlt die Stellplatzmiete.');
+            }
+
+            if (! $istMiete && ($preis->stellplatz_kaufpreis_cent === null || $preis->stellplatz_kaufpreis_cent <= 0)) {
+                $befunde[] = Befund::blockierend('preis.stellplatz_kaufpreis_cent', 'Stellplatzkaufpreis', 4, 'Für den gewählten Stellplatzmodus fehlt der Stellplatzkaufpreis.');
+            }
+
+            return;
+        }
+
+        if ($modus === StellplatzModus::Keiner && PriceStructure::stellplatzBetragErfasst($preis->stellplatz_miete_cent, $preis->stellplatz_kaufpreis_cent)) {
+            $befunde[] = Befund::hinweis('preis.stellplatz_modus', 'Stellplatzmodus', 4, self::HINWEIS_STELLPLATZ_OHNE_MODUS);
         }
     }
 
     /**
-     * @param  array<string, string>  $fehlend
+     * Unbekannte Merkmale sind nur Hinweise (Masterprompt-Abgleich B.4), als
+     * ein gesammelter Befund je Objekt.
+     *
+     * @param  list<Befund>  $befunde
      */
-    private function pruefeEnergieausweis(Listing $listing, array &$fehlend): void
+    private function pruefeMerkmale(Listing $listing, array &$befunde): void
     {
-        if ($listing->energy === null || $listing->energy->status === null) {
-            $fehlend['energie.status'] = 'Energieausweisstatus';
+        $unbekannt = [];
+
+        foreach ($listing->merkmale() as $schluessel => $wert) {
+            if ($wert === MerkmalWert::Unbekannt) {
+                $unbekannt[] = Merkmale::label($schluessel);
+            }
+        }
+
+        if ($unbekannt !== []) {
+            $befunde[] = Befund::hinweis('ausstattung', 'Ausstattungsmerkmale', 5, 'Merkmale ohne Angabe: '.implode(', ', $unbekannt).'. Sie werden weder als ja noch als nein übertragen.');
         }
     }
 
     /**
-     * @param  array<string, string>  $fehlend
+     * Mindestens ein freigegebenes Bild im Inserat. Nicht freigegebene
+     * Dokumente bleiben unberücksichtigt.
+     *
+     * @param  list<Befund>  $befunde
      */
-    private function pruefeMedien(Listing $listing, array &$fehlend): void
+    private function pruefeMedien(Listing $listing, array &$befunde): void
     {
-        $hatBild = $listing->media
-            ->where('typ', MediaTyp::Bild)
-            ->where('im_inserat', true)
-            ->isNotEmpty();
+        $hatBild = $listing->media->contains(
+            fn (ListingMedia $medium): bool => $medium->typ === MediaTyp::Bild && $medium->istVeroeffentlichbar(),
+        );
 
         if (! $hatBild) {
-            $fehlend['medien.bild'] = 'Mindestens ein Bild für das Inserat';
+            $befunde[] = Befund::blockierend('medien.bild', 'Mindestens ein Bild für das Inserat', 6, 'Es fehlt mindestens ein freigegebenes Bild für das Inserat.');
+        }
+    }
+
+    /**
+     * @param  list<Befund>  $befunde
+     */
+    private function pruefeTexte(Listing $listing, array &$befunde): void
+    {
+        if (empty($listing->titel)) {
+            $befunde[] = Befund::blockierend('titel', 'Titel', 7);
+        }
+
+        if (empty($listing->beschreibung_objekt)) {
+            $befunde[] = Befund::blockierend('beschreibung_objekt', 'Objektbeschreibung', 8);
+        }
+
+        if (empty($listing->beschreibung_lage)) {
+            $befunde[] = Befund::hinweis('beschreibung_lage', 'Lagebeschreibung', 8, 'Die Lagebeschreibung fehlt.');
         }
     }
 }

@@ -6,7 +6,8 @@
     <div class="page-header">
         <h1>Benutzer</h1>
         <div class="page-actions">
-            <a href="{{ route('admin.users.create') }}" class="btn btn-primary">Benutzer anlegen</a>
+            <a href="{{ route('admin.users.invite') }}" class="btn btn-primary">Benutzer einladen</a>
+            <a href="{{ route('admin.users.create') }}" class="btn btn-secondary">Mit Initialpasswort anlegen</a>
         </div>
     </div>
 
@@ -17,6 +18,7 @@
                     <th>Name</th>
                     <th>E-Mail-Adresse</th>
                     <th>Rolle</th>
+                    <th>Darf veröffentlichen</th>
                     <th>2FA</th>
                     <th>Status</th>
                     <th>Letzte Anmeldung</th>
@@ -29,6 +31,13 @@
                         <td>{{ $listedUser->name }}</td>
                         <td>{{ $listedUser->email }}</td>
                         <td>{{ $listedUser->role->label() }}</td>
+                        <td>
+                            @if ($listedUser->kannVeroeffentlichen())
+                                <span class="badge badge-success">Ja</span>
+                            @else
+                                <span class="badge badge-neutral">Nein</span>
+                            @endif
+                        </td>
                         <td>
                             @if ($listedUser->hasTwoFactorEnabled())
                                 <span class="badge badge-success">Ja</span>
@@ -71,8 +80,59 @@
                     </tr>
                 @empty
                     <tr>
-                        <td colspan="7">
+                        <td colspan="8">
                             <div class="empty-state">Es sind noch keine Benutzer angelegt.</div>
+                        </td>
+                    </tr>
+                @endforelse
+            </tbody>
+        </table>
+    </div>
+
+    <div class="page-header">
+        <h2>Offene Einladungen</h2>
+    </div>
+
+    <div class="table-wrap">
+        <table class="table">
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>E-Mail-Adresse</th>
+                    <th>Rolle</th>
+                    <th>Gültig bis</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                @forelse ($invitations as $invitation)
+                    <tr>
+                        <td>{{ $invitation->name }}</td>
+                        <td>{{ $invitation->email }}</td>
+                        <td>{{ $invitation->role->label() }}</td>
+                        <td>
+                            {{ $invitation->expires_at->format('d.m.Y H:i') }}
+                            @if ($invitation->istAbgelaufen())
+                                <span class="badge badge-error">Abgelaufen</span>
+                            @endif
+                        </td>
+                        <td>
+                            <div class="cluster">
+                                <form method="POST" action="{{ route('admin.users.invitations.resend', $invitation) }}">
+                                    @csrf
+                                    <button type="submit" class="btn btn-secondary btn-sm">Erneut senden</button>
+                                </form>
+                                <form method="POST" action="{{ route('admin.users.invitations.revoke', $invitation) }}" data-confirm="Diese Einladung wirklich widerrufen?">
+                                    @csrf
+                                    <button type="submit" class="btn btn-danger btn-sm">Widerrufen</button>
+                                </form>
+                            </div>
+                        </td>
+                    </tr>
+                @empty
+                    <tr>
+                        <td colspan="5">
+                            <div class="empty-state">Es liegen keine offenen Einladungen vor.</div>
                         </td>
                     </tr>
                 @endforelse

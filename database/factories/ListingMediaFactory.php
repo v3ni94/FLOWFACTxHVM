@@ -33,6 +33,7 @@ class ListingMediaFactory extends Factory
             'hoehe' => 1200,
             'sortierung' => 0,
             'titel' => null,
+            'rotation' => 0,
             'im_inserat' => true,
             'flowfact_multimedia_id' => null,
             'pruefsumme_sha256' => hash('sha256', (string) Str::uuid()),
@@ -50,6 +51,32 @@ class ListingMediaFactory extends Factory
     {
         return $this->state(fn (array $attributes): array => [
             'typ' => MediaTyp::Grundriss,
+        ]);
+    }
+
+    public function dokument(): static
+    {
+        return $this->state(fn (array $attributes): array => [
+            'typ' => MediaTyp::Dokument,
+            'dateiname_original' => 'expose.pdf',
+            'mime' => 'application/pdf',
+            'breite' => null,
+            'hoehe' => null,
+        ]);
+    }
+
+    public function energieausweis(): static
+    {
+        return $this->dokument()->state(fn (array $attributes): array => [
+            'typ' => MediaTyp::Energieausweis,
+            'dateiname_original' => 'energieausweis.pdf',
+        ]);
+    }
+
+    public function freigegeben(bool $freigegeben = true): static
+    {
+        return $this->state(fn (array $attributes): array => [
+            'freigegeben' => $freigegeben,
         ]);
     }
 }

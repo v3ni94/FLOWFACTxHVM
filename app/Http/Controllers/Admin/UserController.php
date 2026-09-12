@@ -6,14 +6,20 @@ namespace App\Http\Controllers\Admin;
 
 use App\Enums\UserRole;
 use App\Http\Controllers\Controller;
+use App\Http\Requests\Admin\InviteUserRequest;
 use App\Http\Requests\Admin\StoreUserRequest;
 use App\Http\Requests\Admin\UpdateUserRequest;
+use App\Mail\UserInvitationMail;
 use App\Models\User;
+use App\Models\UserInvitation;
 use App\Policies\UserPolicy;
 use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Illuminate\View\View;
 
@@ -27,8 +33,15 @@ class UserController extends Controller
 
         $users = User::query()->orderBy('name')->get();
 
+        $invitations = UserInvitation::query()
+            ->whereNull('accepted_at')
+            ->whereNull('revoked_at')
+            ->orderByDesc('created_at')
+            ->get();
+
         return view('admin.users.index', [
             'users' => $users,
+            'invitations' => $invitations,
         ]);
     }
 
@@ -52,10 +65,66 @@ class UserController extends Controller
             'phone' => $request->string('phone')->value() ?: null,
             'password' => Hash::make($request->string('password')->value()),
             'is_active' => true,
+            'darf_veroeffentlichen' => $request->boolean('darf_veroeffentlichen'),
         ]);
 
         return redirect()->route('admin.users.index')
             ->with('status', 'Der Benutzer "'.$user->name.'" wurde angelegt.');
+    }
+
+    /**
+     * Einladungsformular (Masterprompt Abschnitt 6, Abgleich B.2). Dies ist
+     * der in der Oberfläche vorgesehene Standardweg, einen neuen Benutzer
+     * anzulegen; create()/store() mit einem Initialpasswort bleiben als
+     * Ausweichmöglichkeit erhalten.
+     */
+    public function invite(): View
+    {
+        $this->authorize('create', User::class);
+
+        return view('admin.users.invite', [
+            'roles' => UserRole::options(),
+        ]);
+    }
+
+    public function storeInvitation(InviteUserRequest $request): RedirectResponse
+    {
+        $this->authorize('create', User::class);
+
+        [$invitation, $token] = UserInvitation::issue(
+            $request->string('name')->value(),
+            $request->string('email')->value(),
+            UserRole::from($request->string('role')->value()),
+            $request->boolean('darf_veroeffentlichen'),
+            $request->user(),
+        );
+
+        Mail::to($invitation->email)->send(new UserInvitationMail($invitation, $token));
+
+        return redirect()->route('admin.users.index')
+            ->with('status', 'Die Einladung an "'.$invitation->email.'" wurde versendet.');
+    }
+
+    public function resendInvitation(UserInvitation $invitation): RedirectResponse
+    {
+        $this->authorize('create', User::class);
+
+        abort_if($invitation->istVerwendet(), 409, 'Diese Einladung wurde bereits angenommen.');
+
+        $token = $invitation->reissue();
+
+        Mail::to($invitation->email)->send(new UserInvitationMail($invitation, $token));
+
+        return back()->with('status', 'Die Einladung an "'.$invitation->email.'" wurde erneut versendet.');
+    }
+
+    public function revokeInvitation(UserInvitation $invitation): RedirectResponse
+    {
+        $this->authorize('create', User::class);
+
+        $invitation->forceFill(['revoked_at' => now()])->save();
+
+        return back()->with('status', 'Die Einladung an "'.$invitation->email.'" wurde widerrufen.');
     }
 
     public function edit(User $user): View
@@ -87,6 +156,7 @@ class UserController extends Controller
             'email' => $request->string('email')->value(),
             'role' => $neueRolle,
             'phone' => $request->string('phone')->value() ?: null,
+            'darf_veroeffentlichen' => $request->boolean('darf_veroeffentlichen'),
         ]);
 
         return redirect()->route('admin.users.index')
@@ -112,7 +182,28 @@ class UserController extends Controller
         $user->setRememberToken(Str::random(60));
         $user->save();
 
+        $this->beendeSitzungenVon($user);
+
         return back()->with('status', 'Der Benutzer "'.$user->name.'" wurde deaktiviert.');
+    }
+
+    /**
+     * Löscht die Sitzungen des Benutzers aus der Tabelle "sessions"
+     * (Masterprompt Abschnitt 6, Abgleich B.3: "Sperrung eines Benutzers
+     * beendet bestehende Sitzungen"). Wirkt nur mit dem Datenbank-Sitzungs-
+     * treiber, der in Produktion konfiguriert ist; die Prüfung mit
+     * Schema::hasTable() schützt Umgebungen ohne diese Tabelle (z. B. den
+     * Sitzungstreiber "array" in Tests, sofern die Tabelle dort nicht
+     * angelegt wurde). EnsureUserIsActive meldet die noch laufende, aber nun
+     * verwaiste Sitzung des Benutzers zusätzlich beim nächsten Seitenaufruf ab.
+     */
+    private function beendeSitzungenVon(User $user): void
+    {
+        if (! Schema::hasTable('sessions')) {
+            return;
+        }
+
+        DB::table('sessions')->where('user_id', $user->id)->delete();
     }
 
     public function activate(User $user): RedirectResponse

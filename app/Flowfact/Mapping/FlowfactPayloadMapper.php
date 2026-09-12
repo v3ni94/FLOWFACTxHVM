@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Flowfact\Mapping;
 
 use App\Domain\Listing\PublishableFields;
+use App\Enums\MerkmalWert;
 use App\Models\Listing;
 use BackedEnum;
 use DateTimeInterface;
@@ -113,7 +114,10 @@ final class FlowfactPayloadMapper
                 $merkmale = is_array($wert) ? $wert : [];
 
                 foreach (FieldCatalog::AUSSTATTUNG_SCHLUESSEL as $schluessel) {
-                    $this->verarbeite('ausstattung.'.$schluessel, (bool) ($merkmale[$schluessel] ?? false), $fields, $warnungen, $adresse);
+                    // Dreiwertig (Masterprompt-Abgleich B.2, B.8): ältere boolesche
+                    // Werte bleiben lesbar, "unbekannt" wird weder als ja noch
+                    // als nein übertragen (null, wie ein leeres Feld).
+                    $this->verarbeite('ausstattung.'.$schluessel, MerkmalWert::aus($merkmale[$schluessel] ?? null)->alsBool(), $fields, $warnungen, $adresse);
                 }
 
                 return;
