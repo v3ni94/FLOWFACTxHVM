@@ -130,15 +130,16 @@ Fünf-Minuten-Takt verfügbar, zeigt `flow:check-config` die tatsächliche Verz�
 
 ## 9. Ersten Administrator anlegen
 
-Nach dem ersten `flow:install` einen Administrator anlegen. Sobald der entsprechende Artisan-Befehl aus dem
-Grundgerüst (`flow:user:create`, Zuständigkeit des Auth-Arbeitspakets) verfügbar ist:
+Nach dem ersten `flow:install` einen Administrator anlegen. Die E-Mail-Adresse ist das Argument, Name und
+Rolle sind Optionen:
 
 ```
-php current/artisan flow:user:create --name="Vorname Nachname" --email="name@muellerhv.de" --role=admin
+php current/artisan flow:user:create name@muellerhv.de --name="Vorname Nachname" --role=admin
 ```
 
-Bis dahin lässt sich ein Administrator über `php artisan tinker` auf dem Server anlegen. Das Passwort ist bei
-der ersten Anmeldung zu ändern.
+Ohne `--password` wird ein Zufallspasswort erzeugt und einmalig ausgegeben (bei IONOS-Cronjobs im Protokoll
+beziehungsweise in der Benachrichtigungsmail). Das Passwort ist bei der ersten Anmeldung zu ändern. Ohne
+Shellzugriff den Befehl als einmaligen Cronjob ausführen und den Cronjob danach löschen.
 
 ## 10. Betriebsprüfung
 
