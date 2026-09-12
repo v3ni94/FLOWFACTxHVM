@@ -33,7 +33,10 @@ final class ListingChangeObserverTest extends TestCase
 
         $felder = ListingChange::query()->orderBy('id')->pluck('feld')->all();
 
-        self::assertSame([
+        // Reihenfolge der geänderten Attribute innerhalb eines Speichervorgangs
+        // hängt vom Datenbanktreiber ab (SQLite und MariaDB unterscheiden sich),
+        // deshalb Vergleich ohne Reihenfolge.
+        self::assertEqualsCanonicalizing([
             'listings.titel',
             'listings.zimmer',
             'listing_prices.kaltmiete_cent',
