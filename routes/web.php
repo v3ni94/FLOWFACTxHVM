@@ -8,8 +8,9 @@ use App\Http\Controllers\App\DashboardController;
 use App\Http\Controllers\App\ListingController;
 use App\Http\Controllers\App\ListingMediaController;
 use App\Http\Controllers\App\ListingTextController;
-use App\Http\Controllers\App\ListingWizardController;
 use App\Http\Controllers\App\MediaStreamController;
+use App\Http\Controllers\App\ReviewController;
+use App\Http\Controllers\App\Steps\StepDispatcher;
 use App\Http\Controllers\Auth\ForgotPasswordController;
 use App\Http\Controllers\Auth\InvitationController;
 use App\Http\Controllers\Auth\LoginController;
@@ -47,29 +48,43 @@ Route::middleware(['auth', EnsureUserIsActive::class])->group(function () {
 
     Route::get('/app/dashboard', [DashboardController::class, 'index'])->name('app.dashboard');
 
+    // Objekte (Masterprompt 7, 24)
     Route::get('/app/objekte', [ListingController::class, 'index'])->name('app.listings.index');
     Route::post('/app/objekte', [ListingController::class, 'store'])->name('app.listings.create');
     Route::get('/app/objekte/{listing}', [ListingController::class, 'show'])->name('app.listings.show');
+    Route::get('/app/objekte/{listing}/historie', [ListingController::class, 'history'])->name('app.listings.history');
+    Route::post('/app/objekte/{listing}/duplizieren', [ListingController::class, 'duplicate'])->name('app.listings.duplicate');
     Route::post('/app/objekte/{listing}/archivieren', [ListingController::class, 'archive'])->name('app.listings.archive');
-    Route::post('/app/objekte/{listing}/status/bereit', [ListingController::class, 'markiereBereit'])->name('app.listings.status.bereit');
-    Route::post('/app/objekte/{listing}/uebertragen', [ListingController::class, 'transfer'])->name('app.listings.transfer');
-    Route::post('/app/objekte/{listing}/veroeffentlichen', [ListingController::class, 'publish'])->name('app.listings.publish');
-    Route::post('/app/objekte/{listing}/zurueckziehen', [ListingController::class, 'withdraw'])->name('app.listings.withdraw');
 
-    Route::get('/app/objekte/{listing}/schritt/{schritt}', [ListingWizardController::class, 'step'])
+    // Acht Schritte über den StepDispatcher (docs/masterprompt-abgleich.md B.1)
+    Route::get('/app/objekte/{listing}/schritt/{schritt}', [StepDispatcher::class, 'show'])
         ->whereNumber('schritt')
         ->name('app.listings.step');
-    Route::post('/app/objekte/{listing}/schritt/{schritt}', [ListingWizardController::class, 'stepStore'])
+    Route::post('/app/objekte/{listing}/schritt/{schritt}', [StepDispatcher::class, 'store'])
         ->whereNumber('schritt')
         ->name('app.listings.step.store');
+    Route::patch('/app/objekte/{listing}/schritt/{schritt}', [StepDispatcher::class, 'autosave'])
+        ->whereNumber('schritt')
+        ->name('app.listings.step.autosave');
 
+    // Prüfen und veröffentlichen (Masterprompt 17 bis 21, 24)
+    Route::get('/app/objekte/{listing}/pruefen', [ReviewController::class, 'review'])->name('app.listings.review');
+    Route::post('/app/objekte/{listing}/status/bereit', [ReviewController::class, 'markiereBereit'])->name('app.listings.status.bereit');
+    Route::post('/app/objekte/{listing}/uebertragen', [ReviewController::class, 'transfer'])->name('app.listings.transfer');
+    Route::post('/app/objekte/{listing}/veroeffentlichen', [ReviewController::class, 'publish'])->name('app.listings.publish');
+    Route::post('/app/objekte/{listing}/zurueckziehen', [ReviewController::class, 'withdraw'])->name('app.listings.withdraw');
+
+    // Medien (Schritt 6)
     Route::post('/app/objekte/{listing}/medien', [ListingMediaController::class, 'store'])->name('app.listings.media.store');
     Route::delete('/app/objekte/{listing}/medien/{media}', [ListingMediaController::class, 'destroy'])->name('app.listings.media.destroy');
     Route::post('/app/objekte/{listing}/medien/sortierung', [ListingMediaController::class, 'sort'])->name('app.listings.media.sort');
     Route::post('/app/objekte/{listing}/medien/{media}', [ListingMediaController::class, 'update'])->name('app.listings.media.update');
+    Route::post('/app/objekte/{listing}/medien/{media}/drehen', [ListingMediaController::class, 'rotate'])->name('app.listings.media.rotate');
 
+    // Texte (Schritte 7 und 8)
     Route::post('/app/objekte/{listing}/texte/vorschlag', [ListingTextController::class, 'generate'])->name('app.listings.texts.generate');
     Route::post('/app/objekte/{listing}/texte/{text}/uebernehmen', [ListingTextController::class, 'accept'])->name('app.listings.texts.accept');
+    Route::post('/app/objekte/{listing}/texte/ueberarbeiten', [ListingTextController::class, 'revise'])->name('app.listings.texts.revise');
 
     Route::get('/medien/{media}/{variante}', [MediaStreamController::class, 'show'])
         ->where('variante', 'original|vorschau')

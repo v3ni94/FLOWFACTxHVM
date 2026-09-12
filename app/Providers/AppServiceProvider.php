@@ -15,7 +15,9 @@ use App\Models\ListingPrice;
 use App\Observers\ListingChangeObserver;
 use App\Services\Ai\AnthropicTextGenerator;
 use App\Services\Ai\FakeTextGenerator;
+use App\Services\Ai\FakeTextReviser;
 use App\Services\Ai\TextGenerator;
+use App\Services\Ai\TextReviser;
 use Illuminate\Support\ServiceProvider;
 
 class AppServiceProvider extends ServiceProvider
@@ -42,6 +44,9 @@ class AppServiceProvider extends ServiceProvider
         // entsteht.
         $this->app->bind(TextGenerator::class, function ($app): TextGenerator {
             $anthropic = $app->make(AnthropicTextGenerator::class);
+
+            // Überarbeitung vorhandener Texte (Masterprompt 16). Die KI-Umsetzung folgt in Welle 3.
+            $this->app->bind(TextReviser::class, FakeTextReviser::class);
 
             return $anthropic->isConfigured() ? $anthropic : $app->make(FakeTextGenerator::class);
         });
