@@ -59,6 +59,9 @@ final class InternalMarkerTest extends FlowfactTestCase
             ->on('GET', '#^/portal-management-service/estates/[^/]+/portals$#', self::estatePortalsResponse(['portal-is24']))
             ->install();
 
+        // Freigabeversion wie im Schritt Prüfen und veröffentlichen (B.6).
+        $this->freigeben($listing, ['portal-is24']);
+
         $service = app(PublishingService::class);
         $ergebnis = $service->publish($listing->fresh(['price', 'energy', 'media', 'internal']), ['portal-is24']);
 

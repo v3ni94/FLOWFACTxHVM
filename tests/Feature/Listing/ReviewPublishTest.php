@@ -303,7 +303,8 @@ final class ReviewPublishTest extends TestCase
                 $this->angefragtePortalIds = $portalIds;
                 $this->releaseVorhandenBeimAufruf = ListingRelease::query()->where('listing_id', $listing->id)->exists();
 
-                return new PublishResult(true, 'Die Veröffentlichung wurde angefordert.');
+                // Ein echter Erfolg meldet die Zahl der angeforderten Portale (Fall B hätte 0).
+                return new PublishResult(true, 'Die Veröffentlichung wurde angefordert.', angefordert: max(1, count($portalIds)));
             }
 
             public function withdraw(Listing $listing, array $portalIds, ?User $user = null): PublishResult

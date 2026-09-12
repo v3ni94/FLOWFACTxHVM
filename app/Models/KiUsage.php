@@ -32,6 +32,7 @@ class KiUsage extends Model
     protected function casts(): array
     {
         return [
+            'zweck' => 'string',
             'input_tokens' => 'integer',
             'output_tokens' => 'integer',
             'dauer_ms' => 'integer',

@@ -229,6 +229,48 @@ final class KiSettingsTest extends TestCase
         $response->assertSee('Letzte Aufrufe');
     }
 
+    /**
+     * Masterprompt Abschnitt 16: der Verbrauch wird zusätzlich nach Zweck
+     * (Entwurf, Überarbeitung) gruppiert angezeigt.
+     */
+    public function test_verbrauch_wird_nach_zweck_gruppiert_angezeigt(): void
+    {
+        KiUsage::factory()->create(['modell' => 'claude-opus-5', 'zweck' => 'entwurf', 'input_tokens' => 100, 'output_tokens' => 50]);
+        KiUsage::factory()->create(['modell' => 'claude-opus-5', 'zweck' => 'ueberarbeitung', 'input_tokens' => 40, 'output_tokens' => 20]);
+
+        $response = $this->actingAs($this->admin())->get('/admin/ki');
+
+        $response->assertOk();
+        $response->assertSee('Verbrauch nach Zweck');
+        $response->assertSee('Entwurf');
+        $response->assertSee('Überarbeitung');
+    }
+
+    /**
+     * Masterprompt Abschnitt 16: solange kein Anthropic-Anbieter mit
+     * Schlüssel konfiguriert ist, weist die Seite ehrlich auf den
+     * Vorlagenmodus hin.
+     */
+    public function test_ohne_anthropic_anbieter_wird_der_vorlagenmodus_angezeigt(): void
+    {
+        $response = $this->actingAs($this->admin())->get('/admin/ki');
+
+        $response->assertOk();
+        $response->assertSee('Vorlagenmodus aktiv, keine externen Aufrufe');
+    }
+
+    public function test_mit_anthropic_anbieter_und_schluessel_wird_der_vorlagenmodus_nicht_angezeigt(): void
+    {
+        $admin = $this->admin();
+        $this->settings()->set('ki.provider', 'anthropic');
+        $this->settings()->setSecret('ki.api_key', self::API_KEY);
+
+        $response = $this->actingAs($admin)->get('/admin/ki');
+
+        $response->assertOk();
+        $response->assertDontSee('Vorlagenmodus aktiv, keine externen Aufrufe');
+    }
+
     private function fakeHttpClient(ResponseInterface $response): ClientInterface
     {
         return new class($response) implements ClientInterface

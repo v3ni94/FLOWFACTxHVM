@@ -52,6 +52,9 @@ final class SchemaCommandTest extends FlowfactTestCase
             ->expectsOutputToContain('zugeordnet')
             ->expectsOutputToContain('Zuordnung fehlt')
             ->expectsOutputToContain('Zielfeld nicht im Schema')
+            // Eine Erwartung je Tabellenzeile (Ausgabe-Mock).
+            ->expectsOutputToContain('offen, Übertragung gesperrt')
+            ->expectsOutputToContain('gewerbe_unterart.laden')
             ->assertExitCode(0);
 
         $cache = $this->settings()->get('flowfact.schema_cache_'.self::SCHEMA_MIETE);

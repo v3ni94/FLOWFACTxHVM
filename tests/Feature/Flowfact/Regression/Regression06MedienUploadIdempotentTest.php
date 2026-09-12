@@ -52,6 +52,7 @@ final class Regression06MedienUploadIdempotentTest extends FlowfactTestCase
         $listing = $this->bereitesListing(['status' => ListingStatus::Bereit]);
         $medium = $listing->media()->first();
         Storage::disk('media')->put($medium->pfad, $this->beispielbild());
+        $this->freigeben($listing, []);
 
         $erwarteterDateiname = app(MediaSyncService::class)->dateiname($listing, $medium, 'jpg');
         self::assertSame($listing->uuid.'-'.$medium->id.'-'.substr($medium->pruefsumme_sha256, 0, 12).'.jpg', $erwarteterDateiname);
@@ -105,6 +106,7 @@ final class Regression06MedienUploadIdempotentTest extends FlowfactTestCase
         $listing = $this->bereitesListing(['status' => ListingStatus::Bereit]);
         $medium = $listing->media()->first();
         Storage::disk('media')->put($medium->pfad, $this->beispielbild());
+        $this->freigeben($listing, []);
 
         $fake = $this->fake()
             ->on('POST', self::SEARCH, self::searchResponse([]))

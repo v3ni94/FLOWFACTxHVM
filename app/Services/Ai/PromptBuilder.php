@@ -4,6 +4,10 @@ declare(strict_types=1);
 
 namespace App\Services\Ai;
 
+use App\Domain\Listing\Merkmale;
+use App\Enums\AdressFreigabe;
+use App\Enums\MerkmalWert;
+use App\Enums\Nutzungsstatus;
 use App\Enums\TextFeld;
 use App\Models\Listing;
 use App\Support\Money;
@@ -11,7 +15,8 @@ use App\Support\Money;
 /**
  * Baut den System- und Benutzerprompt für Textvorschläge ausschließlich aus
  * der Positivliste der Inseratsfelder (Datenvertrag Abschnitt 1 und 2.7,
- * ADR-003, ADR-009).
+ * ADR-003, ADR-009, Masterprompt Abschnitt 14 und 16, Masterprompt-Abgleich
+ * B.7).
  *
  * WARUM: Diese Klasse liest niemals die Relation "internal" und keine
  * personenbezogenen Felder (Ansprechpartner, uuid, Objektnummer). Ein Test mit
@@ -20,23 +25,6 @@ use App\Support\Money;
  */
 final class PromptBuilder
 {
-    /**
-     * @var array<string, string>
-     */
-    private const array AUSSTATTUNG_LABEL = [
-        'balkon' => 'Balkon',
-        'terrasse' => 'Terrasse',
-        'garten' => 'Garten',
-        'keller' => 'Keller',
-        'aufzug' => 'Aufzug',
-        'einbaukueche' => 'Einbauküche',
-        'gaeste_wc' => 'Gäste-WC',
-        'barrierefrei' => 'Barrierefrei',
-        'moebliert' => 'Möbliert',
-        'wg_geeignet' => 'WG-geeignet',
-        'haustiere_erlaubt' => 'Haustiere erlaubt',
-    ];
-
     public function systemPrompt(): string
     {
         return <<<'PROMPT'
@@ -50,6 +38,18 @@ final class PromptBuilder
             - Verwenden Sie keine Gedankenstriche, sondern Kommas oder eine andere Formulierung.
             - Schreiben Sie sachlich, seriös und in der formellen Anrede "Sie".
             - Verwenden Sie keine Umgangssprache und keine Emojis.
+            - Nennen Sie ausschließlich die unten als "Ausstattungsmerkmale" aufgeführten
+              Merkmale. Erwähnen Sie keine weiteren, unbekannten oder nicht bestätigten
+              Ausstattungsmerkmale.
+            - Verwenden Sie für das Feld beschreibung_lage ausschließlich eine unten
+              angegebene "Vorhandene Lagebeschreibung" sowie Postleitzahl und Ort.
+              Nennen Sie keine Entfernungen, Fahrzeiten, Verkehrsanbindung,
+              Infrastruktur oder sonstige Nachbarschaftsmerkmale, die dort nicht
+              ausdrücklich angegeben sind.
+            - Treffen Sie Aussagen zur Energieeffizienz oder zum Energieausweis
+              ausschließlich anhand der unten angegebenen Energiedaten.
+            - Beachten Sie zusätzliche, unten unter "Zusätzliche Regeln für dieses Objekt"
+              aufgeführte Vorgaben, insbesondere zur Adresse und zur Vermietungssituation.
 
             Längenvorgaben je Feld:
             - titel: höchstens 100 Zeichen
@@ -72,8 +72,19 @@ final class PromptBuilder
     {
         $zeilen = ['Objektdaten:'];
 
-        foreach ($this->objektZeilen($listing) as $zeile) {
+        foreach ($this->objektZeilen($listing, $felder) as $zeile) {
             $zeilen[] = '- '.$zeile;
+        }
+
+        $regeln = $this->zusaetzlicheRegeln($listing);
+
+        if ($regeln !== []) {
+            $zeilen[] = '';
+            $zeilen[] = 'Zusätzliche Regeln für dieses Objekt:';
+
+            foreach ($regeln as $regel) {
+                $zeilen[] = '- '.$regel;
+            }
         }
 
         $zeilen[] = '';
@@ -84,21 +95,22 @@ final class PromptBuilder
     }
 
     /**
+     * @param  list<TextFeld>  $felder
      * @return list<string>
      */
-    private function objektZeilen(Listing $listing): array
+    private function objektZeilen(Listing $listing, array $felder): array
     {
         $zeilen = [];
 
         $zeilen[] = 'Vermarktungsart: '.($listing->vermarktungsart?->label() ?? 'unbekannt');
         $zeilen[] = 'Objektart: '.($listing->objektart?->label() ?? 'unbekannt');
 
-        if ($listing->adresse_im_inserat_anzeigen) {
+        if ($listing->adress_freigabe === AdressFreigabe::NurPlzOrt) {
+            $zeilen[] = 'Lage: '.trim(sprintf('%s %s', $listing->plz ?? '', $listing->ort ?? ''));
+        } else {
             $strassenteil = trim(sprintf('%s %s', $listing->strasse ?? '', $listing->hausnummer ?? ''));
             $ortsteil = trim(sprintf('%s %s', $listing->plz ?? '', $listing->ort ?? ''));
             $zeilen[] = 'Adresse: '.implode(', ', array_filter([$strassenteil, $ortsteil], fn (string $teil): bool => $teil !== ''));
-        } else {
-            $zeilen[] = 'Lage: '.trim(sprintf('%s %s', $listing->plz ?? '', $listing->ort ?? ''));
         }
 
         $zeilen = array_merge($zeilen, array_filter([
@@ -130,7 +142,37 @@ final class PromptBuilder
         $zeilen = array_merge($zeilen, $this->preisZeilen($listing));
         $zeilen = array_merge($zeilen, $this->energieZeilen($listing));
 
+        if (in_array(TextFeld::BeschreibungLage, $felder, true)) {
+            $vorhandeneLage = trim((string) ($listing->beschreibung_lage ?? ''));
+
+            $zeilen[] = $vorhandeneLage !== ''
+                ? 'Vorhandene Lagebeschreibung: '.$vorhandeneLage
+                : 'Vorhandene Lagebeschreibung: keine.';
+        }
+
         return array_values($zeilen);
+    }
+
+    /**
+     * Bedingte Regeln, die sich aus dem Zustand des Objekts ergeben
+     * (Masterprompt-Abgleich B.7): ausgeblendete Adresse und Vermietung bei
+     * einem Kaufobjekt.
+     *
+     * @return list<string>
+     */
+    private function zusaetzlicheRegeln(Listing $listing): array
+    {
+        $regeln = [];
+
+        if ($listing->adress_freigabe === AdressFreigabe::NurPlzOrt) {
+            $regeln[] = 'Nennen Sie keine Straße und keine Hausnummer.';
+        }
+
+        if ($listing->nutzungsstatus === Nutzungsstatus::Vermietet && $listing->istKauf()) {
+            $regeln[] = 'Das Objekt ist vermietet und darf nicht als bezugsfrei beschrieben werden.';
+        }
+
+        return $regeln;
     }
 
     private function verfuegbarkeit(Listing $listing): ?string
@@ -147,16 +189,19 @@ final class PromptBuilder
     }
 
     /**
+     * Nur ausdrücklich bestätigte Merkmale (Wert "ja") gehen in den Prompt
+     * (Masterprompt-Abgleich B.2, B.8): "nein" und "unbekannt" werden
+     * vollständig ausgelassen, damit nichts Unbestätigtes erwähnt wird.
+     *
      * @return list<string>
      */
     private function ausstattungsMerkmale(Listing $listing): array
     {
-        $merkmale = is_array($listing->ausstattung) ? $listing->ausstattung : [];
         $ergebnis = [];
 
-        foreach (self::AUSSTATTUNG_LABEL as $schluessel => $label) {
-            if ((bool) ($merkmale[$schluessel] ?? false)) {
-                $ergebnis[] = $label;
+        foreach ($listing->merkmale() as $schluessel => $wert) {
+            if ($wert === MerkmalWert::Ja) {
+                $ergebnis[] = Merkmale::label($schluessel);
             }
         }
 

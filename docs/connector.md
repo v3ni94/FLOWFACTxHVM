@@ -1,6 +1,7 @@
 # FLOWFACT-Connector, Entwurf
 
-Stand: 11.09.2026. Verbindliche Vorgabe für die Umsetzung in `app/Flowfact`. Grundlage sind die bestätigten
+Stand: 12.09.2026 (Welle 3: Freigabeversionen, Fall B, Deaktivierung, Job-Schutz, Konflikterkennung). Verbindliche
+Vorgabe für die Umsetzung in `app/Flowfact`. Grundlage sind die bestätigten
 API-Erkenntnisse in [flowfact-api.md](flowfact-api.md) und die Statusachsen in [datenvertrag.md](datenvertrag.md)
 Abschnitt 4. Was am echten Konto noch zu prüfen ist, steht in flowfact-api.md Abschnitt 9; der Connector ist so
 gebaut, dass diese Punkte ohne Codeänderung über Einstellungen nachjustiert werden können.
@@ -29,15 +30,18 @@ app/Flowfact/
   Mapping/
     FieldCatalog.php            Standardzuordnung eigener Felder auf FLOWFACT-Feldnamen und Enum-Codes
     FieldMappingResolver.php    verbindet FieldCatalog mit der Einstellung flowfact.feldzuordnung (Überschreibung)
-    FlowfactPayloadMapper.php   Listing -> Werteform, ausschließlich aus PublishableFields (Positivliste)
+    FlowfactPayloadMapper.php   ListingSnapshot (Freigabeversion) -> Werteform, ausschließlich aus PublishableFields;
+                                map(Listing) bildet die Momentaufnahme aus dem Live-Stand (Vorschau, Tests)
   Sync/
     SyncLease.php               Lease auf listing_flowfact_links.sperre_bis und sperre_token, verhindert parallele Läufe
-    ListingSyncService.php      Ablauf Übertragung (Abschnitt 3), Ergebnisobjekt SyncResult
-    MediaSyncService.php        Bildupload je Medium, Reihenfolge, Titel, Löschen entfernter und ausgeblendeter Bilder
+    ListingSyncService.php      Ablauf Übertragung (Abschnitt 3) auf Basis der jüngsten ListingRelease, Ergebnisobjekt SyncResult
+    MediaSyncService.php        Medienabgleich aus medien_json der Freigabe: Bilder (mit Drehung), Dokumente, Reihenfolge, Titel, Löschen
+    PortalStatusTransition.php  einzige Stelle für Statuswechsel einer Portalveröffentlichung, schreibt listing_portal_status_logs
+    ReleaseGuard.php            Schutz vor veralteten Freigaben in Jobs (jüngste Version, archiviert, Deaktivierung nach Freigabe)
     PublishingService.php       Interface für die Oberfläche: publish, withdraw, refreshStatus, portals
-    FlowfactPublishingService.php  Umsetzung des Interfaces
+    FlowfactPublishingService.php  Umsetzung des Interfaces (Fall A, B, C; Deaktivierungsstatus)
     NullPublishingService.php   Rückgabe "nicht konfiguriert", solange kein Token hinterlegt ist
-    Jobs/TransferListingJob.php, Jobs/RefreshPortalStatusJob.php
+    Jobs/TransferListingJob.php, Jobs/RefreshPortalStatusJob.php  tragen die release_id
   Console/
     FlowfactSmokeCommand.php    flow:flowfact:smoke, Reihenfolge aus flowfact-api.md Abschnitt 10
     FlowfactSchemaCommand.php   flow:flowfact:schema, zeigt Kontoschemata und fehlende Zuordnungen
@@ -62,33 +66,49 @@ auf `NullPublishingService`. Die Oberfläche spricht nur das Interface an.
 ## 3. Ablauf einer Übertragung (ListingSyncService)
 
 Voraussetzung: `listings.status` ist `bereit`, `veroeffentlicht` oder `zurueckgezogen`. Entwürfe werden abgelehnt.
-Zusätzlich muss das Objekt in jedem Status die Vollständigkeitsprüfung (`CompletenessCheck`) bestehen, sonst endet
-der Lauf mit `fehlgeschlagen` und der Liste der fehlenden Felder (Prüfbericht 2026-09-11, Befund 3).
+Es muss eine Freigabeversion (`listing_releases`, Masterprompt-Abgleich B.6) existieren; ohne Freigabe endet der
+Lauf mit "Keine Freigabe vorhanden. Bitte im Schritt Prüfen und veröffentlichen freigeben." Zusätzlich muss das
+Objekt die Vollständigkeitsprüfung (`CompletenessCheck`) bestehen, sonst endet der Lauf mit `fehlgeschlagen` und
+der Liste der fehlenden Felder (Prüfbericht 2026-09-11, Befund 3).
 
+Grundsatz (Masterprompt Abschnitt 19, 23): Übertragung und Veröffentlichung arbeiten ausschließlich mit der
+jüngsten Freigabeversion (`ReleaseService::latest`), nie mit dem Live-Stand. Der Payload entsteht mit
+`FlowfactPayloadMapper::mapSnapshot()` aus `payload_json`, die Medien aus `medien_json` (nur freigegebene, mit
+Reihenfolge, Titel und Drehung), die Portale aus `portale_json`. Änderungen nach der Freigabe erreichen FLOWFACT erst
+mit der nächsten Freigabe; die Oberfläche zeigt sie als "Unveröffentlichte Änderungen".
+
+Führendes System (Masterprompt Abschnitt 23): Müller FLOW führt für die zugeordneten Felder (Abschnitt 4),
+FLOWFACT für alles andere (nicht zugeordnete Felder, Kontakte, Aktivitäten, Portalkonfiguration). Der Connector
+schreibt nur zugeordnete Felder und löscht nur, was er selbst gesendet hat.
+
+0. Payload aus der Freigabe bilden (ohne API-Aufruf). Ist der Payload gesperrt (Objektart Stellplatz/Garage ohne
+   FLOWFACT-Code), endet der Lauf mit "Objektart Stellplatz/Garage wird lokal erfasst; die Übertragung ist erst nach
+   Ermittlung des FLOWFACT-Codes möglich" (Abschnitt 4.3, Einstellung `flowfact.codezuordnung`).
 1. Lease setzen (`sperre_bis = now + 3 Minuten`, `sperre_token` = Zufallswert). Ist eine Lease aktiv, endet der Lauf
    mit `SyncResult::busy()`. Freigabe und Verlängerung sind bedingte UPDATEs auf das eigene Token; ein Lauf, der
    seine Lease überschritten hat, kann die Lease eines Nachfolgers nicht löschen (Befund 7). Während des
-   Medienabgleichs wird die Lease nach jedem übertragenen Bild verlängert (Herzschlag).
+   Medienabgleichs wird die Lease nach jedem übertragenen Medium verlängert (Herzschlag).
 2. `sync_status = uebertragung_laeuft`.
-3. Schema bestimmen: `flowfact.schema_miete` oder `flowfact.schema_kauf` aus den Einstellungen. Fehlt es, endet der
-   Lauf mit einem klaren Konfigurationsfehler (kein Anlegen mit geratenem Schema). Ist bereits eine Entität bekannt
-   (`flowfact_entity_id` gesetzt), gilt das im Link gespeicherte `flowfact_schema`. Weicht das aus der aktuellen
-   Vermarktungsart abgeleitete Schema davon ab, endet der Lauf mit "Die Vermarktungsart wurde nach der Übertragung
-   geändert. Bitte das Objekt in FLOWFACT manuell prüfen oder ein neues Objekt anlegen." Es wird nichts angelegt
-   (Befund 3).
+3. Schema bestimmen: `flowfact.schema_miete` oder `flowfact.schema_kauf` aus den Einstellungen, anhand der
+   Vermarktungsart der Freigabeversion. Fehlt es, endet der Lauf mit einem klaren Konfigurationsfehler (kein Anlegen
+   mit geratenem Schema). Ist bereits eine Entität bekannt (`flowfact_entity_id` gesetzt), gilt das im Link
+   gespeicherte `flowfact_schema`. Weicht das abgeleitete Schema davon ab, endet der Lauf mit "Die Vermarktungsart
+   wurde nach der Übertragung geändert. Bitte das Objekt in FLOWFACT manuell prüfen oder ein neues Objekt anlegen."
+   Es wird nichts angelegt (Befund 3).
 4. Entität finden:
-   a) Ist `flowfact_entity_id` gesetzt: `GET entity-service/schemas/{schema}/entities/{id}`. Bei 404 wird die ID verworfen und mit b) fortgesetzt.
+   a) Ist `flowfact_entity_id` gesetzt: `GET entity-service/schemas/{schema}/entities/{id}`. Bei 404 wird die ID verworfen und mit b) fortgesetzt. Die Antwort liefert `_metadata.lastModifiedTimestamp` für Schritt 6.
    b) Sonst Suche: `POST search-service/schemas/{schema}` mit Flowdsl `HASFIELDWITHVALUE identifier EQUALS objektnummer`, Größe 2. Treffer werden zusätzlich exakt auf Gleichheit des Feldwerts geprüft. Ein Treffer: ID übernehmen. Mehr als ein Treffer: `sync_status = fehlgeschlagen` mit Meldung "Mehrere Objekte mit dieser Nummer in FLOWFACT, bitte manuell klären", kein Anlegen.
-5. Payload erzeugen (Abschnitt 4). Hash der Nutzdaten mit `ListingContentHasher`.
+5. Inhaltsänderung bestimmen: `uebertragener_inhalt_hash` des Links gegen `inhalt_hash` der Freigabeversion.
 6. Anlegen oder Aktualisieren:
-   a) Keine Entität: `POST entity-service/schemas/{schema}` mit `x-ff-version: 2`. Antwort kann Entität oder nur ID sein; beides wird verarbeitet. ID sofort speichern, bevor irgendetwas anderes passiert.
-   b) Entität vorhanden: `PATCH entity-service/schemas/{schema}/entities/{id}` mit den Feldern. Unverändertem Hash entsprechend darf der PATCH übersprungen werden, wenn `uebertragener_inhalt_hash` gleich ist und `--force` nicht gesetzt ist. Lokal geleerte, zugeordnete Felder werden als `{ "values": [] }` gesendet (Abschnitt 4, Befund 5).
-7. Medien abgleichen (MediaSyncService), Befunde 4 und 6:
-   a) Vorgemerkte Löschungen (`listing_media_deletions`) und Medien, die aus dem Inserat genommen wurden (`im_inserat = false`) oder Dokumente sind, aber noch eine `flowfact_multimedia_id` tragen: `DELETE /items/{id}`, lokale ID leeren.
-   b) Für jedes Medium mit `im_inserat = true` (Bild, Grundriss) ohne `flowfact_multimedia_id`: Dateiname deterministisch `<listing uuid>-<media id>-<erste 12 Hex der SHA-256>.<ext>`. Einmal je Lauf `GET /items/entities/{id}?contentCategory=IMAGE` lesen; ein Item mit passendem Dateinamen wird übernommen (ID und Titel gespeichert) statt erneut hochgeladen. Sonst Presigned-URL holen, Binärdatei per PUT mit `Content-Type` hochladen, Item registrieren (mit `title`), ID und `flowfact_titel` speichern, Lease verlängern.
-   c) Weicht `listing_media.titel` von `flowfact_titel` ab: `PATCH /items/{id}` mit JSON-Patch (`replace /title`, bei leerem Titel `remove /title`), danach `flowfact_titel` nachführen.
-   d) Reihenfolge über `PUT /assigned/...` setzen, Titelbild an Position 0: nach jedem Upload, nach jeder Löschung und immer, wenn sich der Inhalts-Hash geändert hat (Reihenfolge und Titelbild sind Teil des Hashes).
-8. Abschluss: `uebertragener_inhalt_hash`, `letzte_uebertragung_at`, `sync_status = uebertragen`, Lease freigeben.
+   a) Keine Entität: `POST entity-service/schemas/{schema}` mit `x-ff-version: 2`. Antwort kann Entität oder nur ID sein; beides wird verarbeitet. ID sofort speichern, bevor irgendetwas anderes passiert. `_metadata.lastModifiedTimestamp` (ersatzweise `_metadata.timestamp`) der Antwort wird als `flowfact_last_modified` gespeichert; fehlt beides, entsteht eine Warnung.
+   b) Entität vorhanden und Inhalt geändert (oder `--force`): Konflikterkennung. Weicht der in Schritt 4 gelesene Änderungszeitpunkt vom gespeicherten `flowfact_last_modified` ab, wurde das Objekt in FLOWFACT seit der letzten Übertragung geändert. Einstellung `flowfact.konfliktverhalten` `abbrechen` (Standard): Lauf endet mit "In FLOWFACT wurde das Objekt seit der letzten Übertragung geändert (Zeitpunkt). Bitte prüfen und erneut freigeben." und `sync_status = fehlgeschlagen`, kein PATCH. `ueberschreiben`: PATCH mit Warnung. Ohne gespeicherten oder ohne gelieferten Zeitpunkt findet kein Vergleich statt. Dann `PATCH entity-service/schemas/{schema}/entities/{id}` mit den Feldern; der Zeitpunkt aus der PATCH-Antwort wird gespeichert, bei leerem Körper per GET nachgelesen. Lokal geleerte, zugeordnete Felder werden als `{ "values": [] }` gesendet, aber nur mit Absicht (Abschnitt 4).
+7. Medien abgleichen (MediaSyncService) auf Basis von `medien_json`, Befunde 4 und 6, Masterprompt Abschnitt 14:
+   a) Vorgemerkte Löschungen (`listing_media_deletions`) sowie Medien mit `flowfact_multimedia_id`, die nicht mehr in der Freigabe stehen (aus dem Inserat genommen, Freigabe entzogen, Dokument ohne Freigabe) oder deren Drehung sich gegenüber der zuletzt übertragenen Version geändert hat: `DELETE /items/{id}`, lokale ID leeren.
+   b) Für jedes freigegebene Medium ohne `flowfact_multimedia_id`: Dateiname deterministisch `<listing uuid>-<media id>-<erste 12 Hex der SHA-256>[-r<Drehung>].<ext>`. Einmal je Lauf und Kategorie `GET /items/entities/{id}?contentCategory=IMAGE|DOCUMENT` lesen; ein Item mit passendem Dateinamen wird übernommen statt erneut hochgeladen. Sonst Presigned-URL holen, Binärdatei per PUT hochladen, Item registrieren (mit `title` aus der Freigabe), ID und `flowfact_titel` speichern, Lease verlängern. Bilder und Grundrisse werden mit eingebrannter Drehung (0, 90, 180, 270 Grad im Uhrzeigersinn) in Portalgröße neu kodiert; die Ausgabe enthält kein EXIF (Test mit APP1-Segment). Dokumente und Energieausweise gehen unverändert in die Dokumentkategorie des Albums; fehlt sie, entsteht die Warnung "Dokument ... wurde nicht übertragen: das FLOWFACT-Album hat keine Kategorie für Dokumente."
+   c) Weicht der Titel der Freigabe von `flowfact_titel` ab: `PATCH /items/{id}` mit JSON-Patch (`replace /title`, bei leerem Titel `remove /title`), danach `flowfact_titel` nachführen.
+   d) Reihenfolge der Bilder über `PUT /assigned/...` setzen, Titelbild an Position 0: nach jedem Upload, nach jeder Löschung und immer, wenn sich der Inhalts-Hash geändert hat.
+8. Abschluss: `uebertragener_inhalt_hash` = Hash der Freigabe, `release_id` = übertragene Version,
+   `letzte_uebertragung_at`, `sync_status = uebertragen`, Lease freigeben.
 9. Fehler: Bei AuthenticationException `fehlgeschlagen` mit Meldung "Token ungültig oder Rechte fehlen", keine automatische Wiederholung. Bei RateLimitException Job mit Verzögerung neu einreihen. Bei Server- oder Transportfehler bis zu drei Versuche mit Backoff 30, 120, 300 Sekunden; danach `fehlgeschlagen`. In jedem Fehlerfall Lease freigeben und `letzter_fehler` setzen (ohne Token, gekürzt).
 
 Zeitüberschreitung nach einem `POST` zum Anlegen: Die Antwort ist unbekannt, die Entität kann existieren. Beim
@@ -96,10 +116,19 @@ nächsten Lauf greift Schritt 4b und findet sie über die Objektnummer. Ein zwei
 ausgeschlossen, solange die Suche funktioniert. Funktioniert die Suche nicht (Fehler statt leerem Ergebnis), wird
 nicht angelegt, sondern der Lauf endet als fehlgeschlagen.
 
-Der synchrone Weg aus der Oberfläche ("Jetzt übertragen") führt denselben Service aus, mit Zeitlimit 25 Sekunden für
-den Gesamtlauf; Bilduploads, die darüber hinausgehen, laufen als Job weiter. Der Job-Pfad (`TransferListingJob`)
-arbeitet mit einem Zeitlimit von 150 Sekunden unterhalb der Lease von 3 Minuten und reiht den Rest ebenfalls erneut
-ein (Befund 7).
+Der synchrone Weg aus der Oberfläche ("In FLOWFACT speichern", "Jetzt veröffentlichen") führt denselben Service aus,
+mit Zeitlimit 25 Sekunden für den Gesamtlauf; Medienuploads, die darüber hinausgehen, laufen als Job weiter. Der
+Job-Pfad (`TransferListingJob`) arbeitet mit einem Zeitlimit von 150 Sekunden unterhalb der Lease von 3 Minuten und
+reiht den Rest ebenfalls erneut ein (Befund 7).
+
+Jobs und Freigabeversionen (Masterprompt Abschnitt 19, 24; `ReleaseGuard`): `TransferListingJob` und
+`RefreshPortalStatusJob` tragen die `release_id`, mit der sie eingereiht wurden. Vor jeder Handlung prüfen sie, ob
+die Version noch die jüngste ist (sonst Eintrag "Veraltete Freigabe übersprungen" im Übertragungsprotokoll, kein
+API-Aufruf) und ob das Objekt nicht archiviert ist. Ein `TransferListingJob` mit `veroeffentlichen = true`
+(Fortsetzung einer Veröffentlichung nach dem Zeitlimit beim Medienupload) fordert die Veröffentlichung für die
+Portale der Freigabe erst an, wenn die Übertragung vollständig ist und nach der Freigabe keine Deaktivierung
+angefordert wurde (`zurueckgezogen_at` oder Status `deaktivierung_angefordert` jünger als `freigegeben_at`); sonst
+"Deaktivierung nach der Freigabe angefordert, Veröffentlichung übersprungen".
 
 ## 4. Feldzuordnung
 
@@ -107,9 +136,12 @@ Quelle jeder Zuordnung ist ausschließlich `PublishableFields` (Positivliste). D
 liefert die Werteform `{ feld: { values: [wert] } }`. Ein Feld ohne Zuordnung wird ausgelassen und in
 `SyncResult::warnungen` gemeldet ("Keine FLOWFACT-Zuordnung für Nebenkosten"), damit die Oberfläche es anzeigen kann.
 
-Geleerte Felder (Prüfbericht 2026-09-11, Befund 5): Zugeordnete Felder, deren lokaler Wert leer ist, liefert der
-Mapper in `MappedPayload::leereFelder`. Beim Anlegen werden sie ausgelassen. Beim PATCH sendet der Sync sie als
-`{ "values": [] }`, damit FLOWFACT den alten Wert löscht (Baujahr, Zustand, Stellplatz, Kaution und so weiter).
+Geleerte Felder (Prüfbericht 2026-09-11, Befund 5; Masterprompt Abschnitt 23, Löschung nur mit Absicht):
+Zugeordnete Felder, deren Wert in der Freigabe leer ist, liefert der Mapper in `MappedPayload::leereFelder`. Beim
+Anlegen werden sie ausgelassen. Beim PATCH sendet der Sync `{ "values": [] }` ausschließlich für Felder, die mit der
+zuletzt übertragenen Freigabeversion (`listing_flowfact_links.release_id`, ersatzweise die Vorgängerversion)
+tatsächlich gesendet wurden und in der aktuellen Freigabe leer sind (`MappedPayload::loeschungenBeschraenktAuf`).
+Felder, die Müller FLOW nie gesendet hat, werden nie gelöscht; ohne frühere Freigabe gibt es keine Löschbefehle.
 Die Einstellung `flowfact.leere_felder_loeschen` (Standard `true`) schaltet das ab, falls das Konto die leere
 Werteliste anders interpretiert; die genaue Serversemantik ist am Konto zu verifizieren (flowfact-api.md
 Abschnitt 9, Punkt 29).
@@ -124,14 +156,16 @@ enthalten und werden nicht separat übertragen" und führt das Zielfeld unter de
 | --- | --- | --- |
 | titel | headline | Text |
 | objektnummer | identifier | Text |
-| objektart, vermarktungsart | estatetype | Code, siehe 4.3 |
+| objektart, gewerbe_unterart | estatetype | Code, siehe 4.3 (Gewerbe: Unterart bestimmt den Code) |
+| nutzungsstatus | let | `vermietet` -> `true`, `leerstehend` -> `false`, `anderweitig_belegt` und `unbekannt` werden nicht gesendet |
 | status (immer) | status | `active` |
-| strasse, hausnummer, plz, ort, land | addresses | `{ type: "private", street: "Straße Nr", zipcode, city, country: "Deutschland" }`; bei `adresse_im_inserat_anzeigen = false` wird das Portal-Flag `showAddress = false` gesetzt, die Adresse selbst wird trotzdem übertragen |
+| strasse, hausnummer, plz, ort, land | addresses | `{ type: "private", street: "Straße Nr", zipcode, city, country: "Deutschland" }`; bei `adress_freigabe = nur_plz_ort` wird das Portal-Flag `showAddress = false` im Publish-Request gesetzt, die Adresse selbst (mit Straße) wird trotzdem übertragen; ob FLOWFACT die Straße dann verbirgt, ist am Konto zu prüfen (Smoke-Test Zeile 15a) |
 | kaufpreis_cent | purchaseprice | Euro als Zahl mit zwei Dezimalstellen |
 | kaltmiete_cent | rent | Euro als Zahl |
 | wohnflaeche_qm | livingarea | Zahl |
 | grundstuecksflaeche_qm | plotarea | Zahl |
-| nutzflaeche_qm | commercialarea | Zahl |
+| gewerbeflaeche_qm | commercialarea | Zahl (Vorrang) |
+| nutzflaeche_qm | commercialarea | Zahl, nur wenn keine Gewerbefläche erfasst ist |
 | zimmer | rooms | Zahl |
 | schlafzimmer | numberbedrooms | Zahl |
 | badezimmer | numberbathrooms | Zahl |
@@ -141,11 +175,13 @@ enthalten und werden nicht separat übertragen" und führt das Zielfeld unter de
 | zustand | condition | Code, siehe 4.3 |
 | energie.effizienzklasse | energyefficienceclass | Code 01 bis 09 |
 | stellplatz_typ | parking | Code, siehe 4.3 |
-| ausstattung.aufzug | elevator | bool |
-| ausstattung.balkon | balconyavailable | bool |
-| ausstattung.keller | cellar | bool |
-| ausstattung.gaeste_wc | guesttoilet | bool |
-| ausstattung.barrierefrei | barrierfree | bool |
+| ausstattung.aufzug | elevator | bool, dreiwertig: `ja` -> true, `nein` -> false, `unbekannt` -> nicht gesendet |
+| ausstattung.balkon | balconyavailable | bool, dreiwertig |
+| ausstattung.keller | cellar | bool, dreiwertig |
+| ausstattung.gaeste_wc | guesttoilet | bool, dreiwertig |
+| ausstattung.barrierearm (liest den älteren Schlüssel barrierefrei) | barrierfree | bool, dreiwertig; Zielfeld am Konto verifizieren |
+| ausstattung.* übrige Merkmale | ohne bestätigten Standard | über flowfact.feldzuordnung setzbar |
+| modernisierungsjahr, heizung_waermeabgabe, heizung_warmwasser, einbaukueche_mitvermietet, adresszusatz, stadtteil | ohne bestätigten Standard | Warnung, bis die Zuordnung am Konto ermittelt ist |
 | beschreibung_objekt, beschreibung_ausstattung, beschreibung_lage, beschreibung_sonstiges | ohne bestätigten Standard | müssen über flowfact.feldzuordnung gesetzt werden, Vorschlag nach Schemaabfrage |
 | nebenkosten_cent, heizkosten_cent, heizkosten_in_nebenkosten_enthalten, warmmiete_cent, kaution_cent, stellplatz_miete_cent, hausgeld_cent, stellplatz_kaufpreis_cent, provision_text, verfuegbar_ab, heizungsart, energietraeger, energie.* außer Klasse | ohne bestätigten Standard | wie oben |
 
@@ -166,9 +202,14 @@ Adminbereich zeigt dieselbe Tabelle und erlaubt die Pflege der Zuordnung mit Aus
 | --- | --- | --- | --- |
 | objektart wohnung | | `01ETAG` | bestätigt (Etagenwohnung als Standard, änderbar) |
 | objektart haus | | `02EFH` | bestätigt |
-| objektart gewerbe | | `06B` | bestätigt (Bürofläche als Standard, änderbar) |
+| objektart mehrfamilienhaus | | `02MFH` | bestätigt (SDK) |
+| objektart gewerbe ohne Unterart | | `06B` | bestätigt (Bürofläche als Standard, änderbar) |
+| gewerbe_unterart buero | | `06B` | bestätigt (SDK) |
+| gewerbe_unterart laden | | `05L` | bestätigt (SDK) |
+| gewerbe_unterart lager | | offen | Warnung "Code für Lagerfläche am Konto ermitteln", estatetype entfällt |
+| gewerbe_unterart sonstiges | | offen | Warnung, estatetype entfällt |
 | objektart grundstueck | | `03BE` | bestätigt |
-| objektart stellplatz | | offen | im SDK-Auszug kein Code, über Schemaabfrage ermitteln |
+| objektart stellplatz | | offen | im SDK-Auszug kein Code; ohne Eintrag `objektart.stellplatz` in flowfact.codezuordnung wird ein Stellplatz nicht übertragen (Meldung in Abschnitt 3, Schritt 0) |
 | zustand erstbezug | | `01` | bestätigt |
 | zustand neuwertig | | `03` | bestätigt |
 | zustand modernisiert | | `05` | bestätigt |
@@ -188,41 +229,81 @@ Die Codetabellen liegen in `FieldCatalog` und sind über `flowfact.codezuordnung
 
 ## 5. Veröffentlichung und Portalstatus
 
+Statusachse je Portal (`PortalStatus`, Masterprompt-Abgleich B.6): `nicht_veroeffentlicht`, `angefordert`, `aktiv`,
+`fehler`, `unbekannt`, `manuelle_freigabe_erforderlich` (Fall B), `deaktivierung_angefordert`,
+`deaktivierung_bestaetigt`; `zurueckgezogen` bleibt für ältere Zeilen lesbar und wird wie
+`deaktivierung_bestaetigt` behandelt. Jeder Statuswechsel läuft über `PortalStatusTransition::apply(publication,
+neu, nachweisQuelle, release, user)` und schreibt einen unveränderlichen Nachweis nach `listing_portal_status_logs`
+(`von_status`, `nach_status`, `nachweis_quelle`, `nachweis_at`, `release_id`, `user_id`) und aktualisiert
+`letzte_pruefung_at` (Masterprompt Abschnitt 21). Nachweisquellen: "POST /publish angefordert", "POST /publish
+Antwort", "POST /publish nicht autorisiert (HTTP 401/403)", "POST /publish Antwort portalsWithoutAccessRights", "POST
+/publish Fehler", "POST /publish OFFLINE angefordert", "GET /estates/{id}/portals onlineSince", "GET
+/estates/{id}/portals ohne Eintrag", "Zeitablauf ohne Rücklesen", "manuell".
+
 1. Die Oberfläche ruft `PublishingService::portals()` und zeigt nur Portale mit `authenticated = true`.
 2. `publish(Listing, portalIds, User)` prüft: Status `bereit` oder `zurueckgezogen` oder `veroeffentlicht`, Policy,
-   Vollständigkeit, erfolgreiche Übertragung (`sync_status = uebertragen`, sonst wird zuerst übertragen). Bleibt
-   die Bildübertragung nach dem synchronen Zeitlimit offen (`sync_status = geaendert_seit_uebertragung`, Job
-   eingereiht), wird nicht veröffentlicht; die Meldung bittet um erneutes Veröffentlichen nach Abschluss der
-   Hintergrundübertragung (Befund 15).
-   Für jedes Portal: Eintrag in `listing_portal_publications` mit `angefordert`, dann `POST /publish` mit
-   `targetStatus ONLINE` und `showAddress` aus dem Listing. Ein leerer 2xx-Körper bleibt `angefordert`. Ein Körper
-   mit `errors` für dieses Objekt setzt `fehler` mit der übersetzten Meldung, `successFullyTransfered` setzt
-   `aktiv` erst nach Rücklesen, `successfullyScheduled` bleibt `angefordert`. Ein Portal zählt erst dann als
-   angefordert, wenn `POST /publish` ohne Ausnahme beantwortet und nicht als Fehler ausgewertet wurde. Wurde kein
-   Portal erfolgreich angefordert, bleibt `listings.status` unverändert (Befund 1).
+   Vollständigkeit, jüngste Freigabeversion (sonst "Keine Freigabe vorhanden ..."). Die übergebenen Portale müssen
+   eine Teilmenge von `portale_json` der Freigabe sein, sonst "Die gewählten Portale sind nicht Teil der jüngsten
+   Freigabe (...)". Erfolgreiche Übertragung der Freigabe (`sync_status = uebertragen` und Hash der Freigabe), sonst
+   wird zuerst übertragen. Bleibt die Medienübertragung nach dem synchronen Zeitlimit offen
+   (`sync_status = geaendert_seit_uebertragung`), wird nicht veröffentlicht; der eingereihte `TransferListingJob`
+   trägt die Freigabe und fordert die Veröffentlichung nach Abschluss selbst an (Abschnitt 3, ReleaseGuard).
+   Für jedes Portal: Publikation mit `release_id`, Wechsel nach `angefordert`, dann `POST /publish` mit
+   `targetStatus ONLINE` und `showAddress` aus der Adressfreigabe der Freigabe. Ein leerer 2xx-Körper bleibt
+   `angefordert`. Ein Körper mit `errors` für dieses Objekt setzt `fehler` mit der übersetzten Meldung,
+   `successFullyTransfered` setzt `aktiv` erst nach Rücklesen, `successfullyScheduled` bleibt `angefordert`. Ein
+   Portal zählt erst dann als angefordert, wenn `POST /publish` ohne Ausnahme beantwortet und nicht als Fehler
+   ausgewertet wurde. Wurde kein Portal erfolgreich angefordert, bleibt `listings.status` unverändert (Befund 1).
+   Fall B (Masterprompt Abschnitt 20): Antwortet `POST /publish` mit 401 oder 403, obwohl Übertragung und Portalliste
+   funktioniert haben, oder nennt die Antwort das Portal unter `portalsWithoutAccessRights`, fehlt dem API-Benutzer
+   das Veröffentlichungsrecht. Die Publikation wird `manuelle_freigabe_erforderlich` mit `letzter_fehler` = "Objekt
+   ist vollständig in FLOWFACT vorbereitet. Portalveröffentlichung in FLOWFACT abschließen."; das Ergebnis ist
+   `ok = true` mit dieser Meldung als Warnung (weder Fehler noch Erfolg), `angefordert = 0`, `nurManuelleFreigabe()`
+   liefert true; der Bearbeitungsstatus bleibt `bereit`. Ein späteres Rücklesen mit `onlineSince` (Abschluss in
+   FLOWFACT) setzt `aktiv` und das Objekt auf `veroeffentlicht`.
+   Fall C: Die Ergebnisse je Portal sind getrennt; die Meldung listet sie auf ("ImmoScout24: angefordert, Immowelt
+   (OpenImmo): manuelle Freigabe erforderlich"), `PublishResult::jePortal` enthält sie maschinenlesbar.
 3. `RefreshPortalStatusJob` liest `GET /estates/{id}/portals`. Ein Eintrag mit dem Portal und `onlineSince` setzt
-   `aktiv` und `bestaetigt_at`. Fehlt der Eintrag bei einer Anforderung, die älter als 30 Minuten ist, wird der
-   Status `unbekannt` mit Hinweis "Status nicht ermittelbar, in FLOWFACT prüfen". Der Job läuft alle fünf Minuten
-   für Objekte mit `angefordert` und stündlich für `aktiv`.
-4. `withdraw` sendet `targetStatus OFFLINE` (auch für Publikationen in `fehler` und `unbekannt`), setzt
-   `zurueckgezogen` nach Rücklesen; bis dahin bleibt der alte Status mit Hinweis "Rückzug angefordert". Eine reine
-   Fehlerpublikation, für die FLOWFACT beim Rücklesen keinen Eintrag kennt, wird lokal auf `nicht_veroeffentlicht`
-   zurückgesetzt.
-5. `listings.status` wird nur über `ListingStatusMachine` geändert: nach erster erfolgreicher Anforderung
-   `veroeffentlicht`. Beim Rücklesen gilt (Befund 1): Solange eine Publikation `angefordert` oder `aktiv` ist,
-   bleibt `veroeffentlicht`. Sind alle Publikationen `fehler`, `unbekannt`, `zurueckgezogen` oder
-   `nicht_veroeffentlicht`, wechselt das Objekt nach `zurueckgezogen`, wenn mindestens ein Portal nach bestätigter
-   Aktivität zurückgezogen wurde, sonst nach `bereit`. Der Übergang `veroeffentlicht -> bereit` ist in der
-   Statusmaschine nur ohne offene Publikation zulässig. `flow:portal-status` prüft deshalb auch veröffentlichte
+   `aktiv` und `bestaetigt_at`, auch aus `manuelle_freigabe_erforderlich` und aus älteren zurückgezogenen Zeilen;
+   bei `deaktivierung_angefordert` bleibt der Status bis zur Bestätigung. Fehlt der Eintrag bei einer Anforderung,
+   die älter als 30 Minuten ist, wird der Status `unbekannt` mit Hinweis "Status nicht ermittelbar, in FLOWFACT
+   prüfen". Der Scheduler (`flow:portal-status`) läuft alle fünf Minuten für Objekte mit `angefordert` oder
+   `deaktivierung_angefordert`, stündlich für `aktiv` und `manuelle_freigabe_erforderlich`, und prüft veröffentlichte
    Objekte ohne offene Publikation, damit Altbestände zurückgeführt werden.
+4. `withdraw` (Masterprompt Abschnitt 24) setzt `deaktivierung_angefordert` mit `zurueckgezogen_at` (auch für
+   Publikationen in `fehler`, `unbekannt` und `manuelle_freigabe_erforderlich`), sendet `targetStatus OFFLINE`
+   und setzt nach Rücklesen ohne Eintrag oder ohne `onlineSince` `deaktivierung_bestaetigt`. Eine reine
+   Fehlerpublikation, die nie online war und für die FLOWFACT keinen Eintrag kennt, wird lokal auf
+   `nicht_veroeffentlicht` zurückgesetzt (Befund 1; der vorherige Status stammt aus dem Nachweis). Antwortet
+   `POST /publish` für OFFLINE mit 401 oder 403, bleibt `deaktivierung_angefordert` mit dem Hinweis "Die
+   Deaktivierung konnte über die Schnittstelle nicht ausgelöst werden (keine Berechtigung). Bitte das Portal in
+   FLOWFACT offline nehmen." stehen.
+5. `listings.status` wird nur über `ListingStatusMachine` geändert: nach erster erfolgreicher Anforderung
+   `veroeffentlicht`. Beim Rücklesen gilt (Befund 1): Solange eine Publikation `angefordert`, `aktiv` oder
+   `deaktivierung_angefordert` ist, bleibt `veroeffentlicht`. Sind alle Publikationen `fehler`, `unbekannt`,
+   `manuelle_freigabe_erforderlich`, `deaktivierung_bestaetigt` (oder ältere `zurueckgezogen`) oder
+   `nicht_veroeffentlicht`, wechselt das Objekt nach `zurueckgezogen`, wenn mindestens ein Portal nach bestätigter
+   Aktivität deaktiviert wurde, sonst nach `bereit`. Ist ein Portal aktiv, während das Objekt bereit oder
+   zurückgezogen ist, wird es veröffentlicht.
+
+Hinweis zur Oberfläche: `ReviewController::publish` setzt den Bearbeitungsstatus bei `ok = true` selbst auf
+`veroeffentlicht`. Im Fall B ist `angefordert = 0`; der Controller sollte `PublishResult::nurManuelleFreigabe()`
+auswerten und den Wechsel dann unterlassen. Bis dahin führt das nächste Rücklesen (`flow:portal-status`, spätestens
+nach fünf Minuten) ein Objekt ohne offene Publikation nach `bereit` zurück.
 
 ## 6. Smoke-Test am echten Konto
 
 `php artisan flow:flowfact:smoke` führt die Schritte 1 bis 5 aus flowfact-api.md Abschnitt 10 aus (nur lesend) und
 druckt je Schritt Erwartung, Ergebnis und Statuscode. Mit `--write` folgen die Schritte 6 bis 17 mit einem Objekt,
-dessen `identifier` mit `TEST-` beginnt, und einem kleinen erzeugten Testbild. Ein `POST /publish` ist im Befehl
-nicht enthalten und kann nicht über Optionen aktiviert werden. Der Befehl schreibt ein Protokoll nach
-`storage/logs/flowfact-smoke-<datum>.md`, das als Nachweis für die offenen Punkte in flowfact-api.md dient.
+dessen `identifier` mit `TEST-` beginnt, und einem kleinen erzeugten Testbild. Der Payload des Testobjekts entsteht
+wie im Betrieb über `FlowfactPayloadMapper::mapSnapshot()` aus einer Wegwerf-Momentaufnahme (ListingSnapshot im
+Speicher, kein Datensatz in `listings` oder `listing_releases`), mit Adressfreigabe "nur PLZ und Ort"; Zeile 15a des
+Protokolls dokumentiert, dass die Straße im Payload steht und `showAddress = false` wäre (am Konto zu prüfen).
+Schritt 7 und 8 melden, ob FLOWFACT `_metadata.lastModifiedTimestamp` liefert (Konflikterkennung). Ein
+`POST /publish` ist im Befehl nicht enthalten und kann nicht über Optionen aktiviert werden; Fall B, Deaktivierung
+und Rücklesen sind daher nur mit `Http::fake` simuliert (Zeile 15b, docs/faehigkeitsmatrix.md). Der Befehl schreibt
+ein Protokoll nach `storage/logs/flowfact-smoke-<datum>.md`, das als Nachweis für die offenen Punkte in
+flowfact-api.md dient.
 
 ## 7. Einstellungen
 
@@ -233,7 +314,9 @@ nicht enthalten und kann nicht über Optionen aktiviert werden. Der Befehl schre
 | flowfact.schema_miete, flowfact.schema_kauf | Text | konkrete Schemanamen des Kontos, Auswahl aus `flow:flowfact:schema` |
 | flowfact.feldzuordnung | JSON | Überschreibung der Feldnamen |
 | flowfact.codezuordnung | JSON | Überschreibung der Codes |
-| flowfact.leere_felder_loeschen | Bool | Standard `true`: geleerte Felder beim PATCH als leere Werteliste senden (Abschnitt 4) |
+| flowfact.leere_felder_loeschen | Bool | Standard `true`: geleerte Felder beim PATCH als leere Werteliste senden, nur für zuvor gesendete Felder (Abschnitt 4) |
+| flowfact.konfliktverhalten | Text | `abbrechen` (Standard): Lauf endet mit Fehler, wenn die FLOWFACT-Entität seit der letzten Übertragung geändert wurde; `ueberschreiben`: zugeordnete Felder werden mit Warnung überschrieben (Abschnitt 3, Schritt 6b). `flow:check-config` zeigt den Wert |
+| flowfact.album_<schema> | JSON | `{ album, bilder, dokumente }`, einmal aus `GET /albums/schemas/{schema}` ermittelt; ohne `dokumente` werden Dokumente nicht übertragen (Warnung) |
 | flowfact.token_hinterlegt_at | Datum | Anzeige im Adminbereich |
 | flowfact.verbindung_geprueft_at, flowfact.verbindung_ergebnis | Text | letzter Verbindungstest über `currentUser` |
 
@@ -249,7 +332,15 @@ nicht enthalten und kann nicht über Optionen aktiviert werden. Der Befehl schre
 | FlowfactPublishingServiceTest | Nur bereit oder zurückgezogen, Portalauswahl, leerer Körper bleibt angefordert, errors setzt fehler, Rücklesen setzt aktiv, kein aktiv ohne Rücklesen |
 | RefreshPortalStatusJobTest | aktiv nach Rücklesen, unbekannt nach 30 Minuten ohne Eintrag |
 | SmokeCommandTest | Befehl ohne Token bricht sauber ab, `--write` erzeugt Identifier mit TEST-, kein publish-Aufruf möglich |
-| Regression/* | Regressionstests zum Prüfbericht 2026-09-11: Befund 1 (Status bleibt bereit, Rückweg aus veröffentlicht), 3 (Schemawechsel, Vollständigkeit), 4 (Medienänderungen), 5 (Löschsemantik im PATCH), 6 (idempotenter Bildupload), 7 (Lease mit Token, Herzschlag) |
+| Regression/01 bis 07 | Regressionstests zum Prüfbericht 2026-09-11: Befund 1 (Status bleibt bereit, Rückweg aus veröffentlicht), 3 (Schemawechsel, Vollständigkeit), 4 (Medienänderungen), 5 (Löschsemantik im PATCH, nur für zuvor gesendete Felder), 6 (idempotenter Bildupload), 7 (Lease mit Token, Herzschlag, deterministisch mit eingefrorener Uhr und Zählern) |
+| Regression/08 Freigabeversion | Payload und Medien aus der Freigabe, spätere Live-Änderungen bleiben unberücksichtigt, Link und Publikation tragen release_id |
+| Regression/09 Veralteter Job | Job mit veralteter Freigabe schreibt "Veraltete Freigabe übersprungen" ohne API-Aufruf, archivierte Objekte, Rückzug nach der Freigabe verhindert POST /publish ONLINE durch den alten Job |
+| Regression/10 Fall B | 401/403 auf /publish und portalsWithoutAccessRights setzen manuelle_freigabe_erforderlich, Objekt bleibt bereit, Rücklesen mit onlineSince setzt aktiv; Ergebnis je Portal in der Meldung; jeder Statuswechsel schreibt einen Nachweis mit Quelle, Zeitpunkt, Freigabe und Benutzer |
+| Regression/11 Deaktivierung | deaktivierung_angefordert und deaktivierung_bestaetigt je Portal, ältere zurueckgezogen-Zeilen, 403 bei OFFLINE, flow:portal-status prüft angeforderte Deaktivierungen |
+| Regression/12 Konflikt | Abbruch bei fremder Änderung, Überschreiben per Einstellung, Speichern des Zeitpunkts nach Anlegen und PATCH, Nachlesen bei leerer PATCH-Antwort, Anzeige in flow:check-config |
+| Regression/13 Dokumente | freigegebene Dokumente und Energieausweise unverändert in die Dokumentkategorie, Warnung ohne Kategorie, Löschung nach entzogener Freigabe |
+| Regression/14 Objektartcodes | 02MFH, 03BE, Gewerbe-Unterarten, Lagerwarnung, let, dreiwertige Merkmale mit altem Schlüssel, Adressfreigabe, Stellplatz ohne Code wird abgewiesen und mit Code übertragen |
+| Unit/ImageResizerTest | Drehung 90/180/270 vor dem Verkleinern, Ausgabe ohne EXIF-APP1-Segment |
 | Console/SchedulerTest, Console/CheckConfigCommandTest | Queue-Worker im Vordergrund, Warteschlangenprüfung meldet gestaute Jobs (Befund 8) |
 
 Alle Tests laufen gegen `Http::fake()` mit Antwortformen aus flowfact-api.md; kein Test ruft die echte API auf.

@@ -37,12 +37,15 @@ final class Regression03SchemawechselTest extends FlowfactTestCase
         $listing->media()->update(['flowfact_multimedia_id' => '101', 'flowfact_titel' => 'Titelbild']);
         $listing = $listing->fresh(['price', 'energy', 'media']);
 
+        $release = $this->freigeben($listing, []);
+
         ListingFlowfactLink::factory()->create([
             'listing_id' => $listing->id,
             'flowfact_entity_id' => 'ent-1',
             'flowfact_schema' => self::SCHEMA_MIETE,
             'sync_status' => SyncStatus::Uebertragen,
             'uebertragener_inhalt_hash' => app(ListingContentHasher::class)->hash($listing),
+            'release_id' => $release->id,
         ]);
 
         return $listing;
@@ -52,10 +55,12 @@ final class Regression03SchemawechselTest extends FlowfactTestCase
     {
         $listing = $this->uebertragenesMietobjekt();
 
-        // Schritt 1 des Assistenten: Vermarktungsart auf Kauf, Schritt 4 mit Kaufpreis gespeichert.
+        // Schritt 1 des Assistenten: Vermarktungsart auf Kauf, Schritt 4 mit Kaufpreis gespeichert,
+        // danach erneut freigegeben (die Freigabeversion trägt jetzt Kauf, B.6).
         $listing->update(['vermarktungsart' => Vermarktungsart::Kauf]);
         $listing->price()->update(['kaufpreis_cent' => 24_900_000]);
         $listing = $listing->fresh(['price', 'energy', 'media']);
+        $this->freigeben($listing, []);
 
         Http::fake();
 
@@ -99,6 +104,7 @@ final class Regression03SchemawechselTest extends FlowfactTestCase
         $listing = $this->uebertragenesMietobjekt();
         $listing->update(['titel' => 'Neuer Titel']);
         $listing = $listing->fresh(['price', 'energy', 'media']);
+        $this->freigeben($listing, []);
         $this->settings()->set('flowfact.album_'.self::SCHEMA_MIETE, ['album' => 'estate_album', 'bilder' => 'images']);
 
         $fake = $this->fake()

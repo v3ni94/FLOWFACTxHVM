@@ -21,9 +21,11 @@ use Throwable;
  *
  * Statusprüfung veröffentlichter Objekte (docs/connector.md Abschnitt 5,
  * Punkt 3). Läuft alle fünf Minuten über den Scheduler: Objekte mit
- * "angefordert" bei jedem Lauf, Objekte mit "aktiv" nur, wenn die letzte
- * Prüfung älter als 60 Minuten ist. Angeforderte Veröffentlichungen ohne
- * Rücklesen nach 30 Minuten werden "unbekannt".
+ * "angefordert" oder "deaktivierung_angefordert" bei jedem Lauf, Objekte mit
+ * "aktiv" oder "manuelle_freigabe_erforderlich" nur, wenn die letzte Prüfung
+ * älter als 60 Minuten ist (Fall B: Abschluss in FLOWFACT wird über
+ * onlineSince erkannt). Angeforderte Veröffentlichungen ohne Rücklesen nach
+ * 30 Minuten werden "unbekannt".
  *
  * Zusätzlich (Prüfbericht 2026-09-11, Befund 1) werden veröffentlichte
  * Objekte geprüft, deren Publikationen sämtlich gescheitert, unbekannt oder
@@ -43,9 +45,9 @@ class PortalStatusCommand extends Command
 
         $listingIds = ListingPortalPublication::query()
             ->where(function ($query) use ($grenze): void {
-                $query->where('status', PortalStatus::Angefordert->value)
+                $query->whereIn('status', [PortalStatus::Angefordert->value, PortalStatus::DeaktivierungAngefordert->value])
                     ->orWhere(function ($aktiv) use ($grenze): void {
-                        $aktiv->where('status', PortalStatus::Aktiv->value)
+                        $aktiv->whereIn('status', [PortalStatus::Aktiv->value, PortalStatus::ManuelleFreigabeErforderlich->value])
                             ->where(function ($pruefung) use ($grenze): void {
                                 $pruefung->whereNull('letzte_pruefung_at')->orWhere('letzte_pruefung_at', '<', $grenze);
                             });
@@ -58,7 +60,7 @@ class PortalStatusCommand extends Command
             ->where('status', ListingStatus::Veroeffentlicht->value)
             ->whereHas('portalPublications')
             ->whereDoesntHave('portalPublications', function ($query): void {
-                $query->whereIn('status', [PortalStatus::Angefordert->value, PortalStatus::Aktiv->value]);
+                $query->whereIn('status', [PortalStatus::Angefordert->value, PortalStatus::Aktiv->value, PortalStatus::DeaktivierungAngefordert->value]);
             })
             ->pluck('id');
 

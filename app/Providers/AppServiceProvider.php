@@ -14,8 +14,10 @@ use App\Models\ListingMedia;
 use App\Models\ListingPrice;
 use App\Observers\ListingChangeObserver;
 use App\Services\Ai\AnthropicTextGenerator;
+use App\Services\Ai\AnthropicTextReviser;
 use App\Services\Ai\FakeTextGenerator;
 use App\Services\Ai\FakeTextReviser;
+use App\Services\Ai\KiAnbieterResolver;
 use App\Services\Ai\TextGenerator;
 use App\Services\Ai\TextReviser;
 use Illuminate\Support\ServiceProvider;
@@ -50,9 +52,17 @@ class AppServiceProvider extends ServiceProvider
 
         // Überarbeitung vorhandener Texte (Masterprompt Abschnitt 16): kürzer,
         // sachlicher, sprachlich verbessern. Eigenständig gebunden, unabhängig
-        // davon, ob TextGenerator zuvor aufgelöst wurde. Die KI-Umsetzung folgt
-        // in Welle 3, bis dahin bleibt der regelbasierte FakeTextReviser aktiv.
-        $this->app->bind(TextReviser::class, FakeTextReviser::class);
+        // davon, ob TextGenerator zuvor aufgelöst wurde, aber mit derselben
+        // Regel (KiAnbieterResolver): Anthropic nur, wenn Anbieter und
+        // Schlüssel konfiguriert sind, sonst der regelbasierte
+        // FakeTextReviser (Vorlagenmodus).
+        $this->app->bind(TextReviser::class, function ($app): TextReviser {
+            /** @var TextReviser */
+            return KiAnbieterResolver::resolve(
+                $app->make(AnthropicTextReviser::class),
+                $app->make(FakeTextReviser::class),
+            );
+        });
     }
 
     /**

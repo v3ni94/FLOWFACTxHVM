@@ -58,8 +58,12 @@ final class ListingSyncServiceTest extends FlowfactTestCase
     {
         $listing = $this->bereitesListing();
         $listing->media()->update(['flowfact_multimedia_id' => '101', 'flowfact_titel' => null, 'titel' => null]);
+        $listing = $listing->fresh(['price', 'energy', 'media']);
 
-        return $listing->fresh(['price', 'energy', 'media']);
+        // Welle 3: Übertragung nur aus der jüngsten Freigabeversion (B.6).
+        $this->freigeben($listing, []);
+
+        return $listing;
     }
 
     /**
@@ -382,6 +386,21 @@ final class ListingSyncServiceTest extends FlowfactTestCase
             self::assertNull($listing->flowfactLink()->first());
         }
 
+        Http::assertNothingSent();
+    }
+
+    /**
+     * Masterprompt-Abgleich B.6: ohne Freigabeversion wird nicht übertragen.
+     */
+    public function test_ohne_freigabe_wird_nicht_uebertragen(): void
+    {
+        Http::fake();
+        $listing = $this->bereitesListing();
+
+        $ergebnis = $this->service()->sync($listing);
+
+        self::assertFalse($ergebnis->ok);
+        self::assertSame(ListingSyncService::MELDUNG_KEINE_FREIGABE, $ergebnis->meldung);
         Http::assertNothingSent();
     }
 

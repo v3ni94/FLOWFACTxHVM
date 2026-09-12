@@ -13,7 +13,6 @@ use App\Enums\GewerbeUnterart;
 use App\Enums\HeizkostenStruktur;
 use App\Enums\HeizkostenVersorgung;
 use App\Enums\Heizungsart;
-use App\Enums\Nutzungsstatus;
 use App\Enums\Objektart;
 use App\Enums\ProvisionTyp;
 use App\Enums\StellplatzModus;
@@ -60,6 +59,25 @@ final class FieldCatalog
     public const string ABSICHTLICH = 'absichtlich';
 
     /**
+     * Nutzungsstatus auf das boolesche FLOWFACT-Feld "let" (vermietet):
+     * vermietet = true, leerstehend = false, alles andere wird nicht gesendet
+     * (Masterprompt-Abgleich B.2, Welle 3).
+     */
+    public const string VERMIETET_FLAG = 'vermietet_flag';
+
+    /**
+     * @var array<string, bool>
+     */
+    public const array NUTZUNGSSTATUS_LET = [
+        'vermietet' => true,
+        'leerstehend' => false,
+    ];
+
+    public const string MELDUNG_STELLPLATZ = 'Objektart Stellplatz/Garage wird lokal erfasst; die Übertragung ist erst nach Ermittlung des FLOWFACT-Codes möglich';
+
+    public const string WARNUNG_LAGER = 'Code für Lagerfläche am Konto ermitteln';
+
+    /**
      * Pseudo-Feld für die zusammengesetzte Adresse. Kein Positivlistenfeld,
      * liefert nur den Zielfeldnamen; die Bestandteile stammen aus der
      * Positivliste (strasse, hausnummer, plz, ort, land).
@@ -67,11 +85,17 @@ final class FieldCatalog
     public const string ADRESSFELD = 'adresse';
 
     /**
+     * Alle Merkmale aus App\Domain\Listing\Merkmale::LABELS (Masterprompt-
+     * Abgleich B.2). Der ältere Schlüssel "barrierefrei" wird über
+     * Merkmale::ALIASE für "barrierearm" gelesen.
+     *
      * @var list<string>
      */
     public const array AUSSTATTUNG_SCHLUESSEL = [
-        'balkon', 'terrasse', 'garten', 'keller', 'aufzug', 'einbaukueche',
-        'gaeste_wc', 'barrierefrei', 'moebliert', 'wg_geeignet', 'haustiere_erlaubt',
+        'balkon', 'terrasse', 'garten', 'gartennutzung', 'aufzug', 'keller', 'abstellraum',
+        'einbaukueche', 'gaeste_wc', 'badewanne', 'dusche', 'tageslichtbad', 'fussbodenheizung',
+        'rollladen', 'moebliert', 'stufenlos', 'barrierearm', 'rollstuhlgeeignet',
+        'haustiere_erlaubt', 'wg_geeignet',
     ];
 
     /**
@@ -83,14 +107,19 @@ final class FieldCatalog
         'objektnummer' => ['ziel' => 'identifier', 'label' => 'Objektnummer', 'art' => self::TEXT, 'bereich' => 'listing'],
         'vermarktungsart' => ['ziel' => null, 'label' => 'Vermarktungsart', 'art' => self::ABSICHTLICH, 'bereich' => 'listing'],
         'objektart' => ['ziel' => 'estatetype', 'label' => 'Objektart', 'art' => self::CODE, 'gruppe' => 'objektart', 'bereich' => 'listing'],
-        // Masterprompt-Abgleich B.2 (Welle 1): neue Inseratsfelder ohne bestätigte Zuordnung, Zuordnung folgt in Welle 3.
-        'gewerbe_unterart' => ['ziel' => null, 'label' => 'Gewerbe-Unterart', 'art' => self::CODE, 'gruppe' => 'gewerbe_unterart', 'bereich' => 'listing'],
-        'nutzungsstatus' => ['ziel' => null, 'label' => 'Nutzungsstatus', 'art' => self::CODE, 'gruppe' => 'nutzungsstatus', 'bereich' => 'listing'],
+        // Masterprompt-Abgleich B.2 (Welle 3): Die Gewerbe-Unterart bestimmt
+        // zusammen mit der Objektart den estatetype-Code (Gruppe gewerbe_unterart),
+        // sie ist kein eigenes Zielfeld.
+        'gewerbe_unterart' => ['ziel' => null, 'label' => 'Gewerbe-Unterart', 'art' => self::ABSICHTLICH, 'gruppe' => 'gewerbe_unterart', 'bereich' => 'listing'],
+        // vermietet -> let true, leerstehend -> let false, sonst nicht gesendet (SDK-Feld "let", boolean).
+        'nutzungsstatus' => ['ziel' => 'let', 'label' => 'Nutzungsstatus', 'art' => self::VERMIETET_FLAG, 'bereich' => 'listing'],
         'adresszusatz' => ['ziel' => null, 'label' => 'Adresszusatz', 'art' => self::TEXT, 'bereich' => 'listing'],
         'stadtteil' => ['ziel' => null, 'label' => 'Stadtteil', 'art' => self::TEXT, 'bereich' => 'listing'],
-        // Ableitungsquelle von adresse_im_inserat_anzeigen, wirkt über showAddress.
+        // Ableitungsquelle von adresse_im_inserat_anzeigen, wirkt über showAddress im Publish-Request.
         'adress_freigabe' => ['ziel' => null, 'label' => 'Adressfreigabe', 'art' => self::ABSICHTLICH, 'bereich' => 'listing'],
-        'gewerbeflaeche_qm' => ['ziel' => null, 'label' => 'Gewerbefläche', 'art' => self::ZAHL, 'bereich' => 'listing'],
+        // Gewerbefläche hat Vorrang vor der Nutzfläche auf commercialarea (beide SDK-bestätigt als number).
+        'gewerbeflaeche_qm' => ['ziel' => 'commercialarea', 'label' => 'Gewerbefläche', 'art' => self::ZAHL, 'bereich' => 'listing'],
+        // Ohne bestätigtes Zielfeld: Warnung, bis die Zuordnung am Konto ermittelt ist.
         'modernisierungsjahr' => ['ziel' => null, 'label' => 'Modernisierungsjahr', 'art' => self::ZAHL, 'bereich' => 'listing'],
         'heizung_waermeabgabe' => ['ziel' => null, 'label' => 'Wärmeabgabe', 'art' => self::CODE, 'gruppe' => 'heizung_waermeabgabe', 'bereich' => 'listing'],
         'heizung_warmwasser' => ['ziel' => null, 'label' => 'Warmwasserbereitung', 'art' => self::CODE, 'gruppe' => 'heizung_warmwasser', 'bereich' => 'listing'],
@@ -119,18 +148,30 @@ final class FieldCatalog
         'heizkosten_versorgung' => ['ziel' => null, 'label' => 'Heizkostenversorgung', 'art' => self::CODE, 'gruppe' => 'heizkosten_versorgung', 'bereich' => 'listing'],
         'verfuegbar_ab_typ' => ['ziel' => null, 'label' => 'Verfügbar ab (Art)', 'art' => self::CODE, 'gruppe' => 'verfuegbar_ab_typ', 'bereich' => 'listing'],
         'verfuegbar_ab_datum' => ['ziel' => null, 'label' => 'Verfügbar ab (Datum)', 'art' => self::DATUM, 'bereich' => 'listing'],
+        // Merkmale dreiwertig (ja, nein, unbekannt; Masterprompt-Abgleich B.2, B.8):
+        // nur die im SDK bestätigten booleschen Felder haben ein Ziel.
         'ausstattung' => ['ziel' => null, 'label' => 'Ausstattung', 'art' => self::AUSSTATTUNG, 'bereich' => 'listing'],
         'ausstattung.balkon' => ['ziel' => 'balconyavailable', 'label' => 'Ausstattung: Balkon', 'art' => self::BOOL, 'bereich' => 'listing'],
         'ausstattung.terrasse' => ['ziel' => null, 'label' => 'Ausstattung: Terrasse', 'art' => self::BOOL, 'bereich' => 'listing'],
         'ausstattung.garten' => ['ziel' => null, 'label' => 'Ausstattung: Garten', 'art' => self::BOOL, 'bereich' => 'listing'],
-        'ausstattung.keller' => ['ziel' => 'cellar', 'label' => 'Ausstattung: Keller', 'art' => self::BOOL, 'bereich' => 'listing'],
+        'ausstattung.gartennutzung' => ['ziel' => null, 'label' => 'Ausstattung: Gartenmitbenutzung', 'art' => self::BOOL, 'bereich' => 'listing'],
         'ausstattung.aufzug' => ['ziel' => 'elevator', 'label' => 'Ausstattung: Aufzug', 'art' => self::BOOL, 'bereich' => 'listing'],
+        'ausstattung.keller' => ['ziel' => 'cellar', 'label' => 'Ausstattung: Keller', 'art' => self::BOOL, 'bereich' => 'listing'],
+        'ausstattung.abstellraum' => ['ziel' => null, 'label' => 'Ausstattung: Abstellraum', 'art' => self::BOOL, 'bereich' => 'listing'],
         'ausstattung.einbaukueche' => ['ziel' => null, 'label' => 'Ausstattung: Einbauküche', 'art' => self::BOOL, 'bereich' => 'listing'],
         'ausstattung.gaeste_wc' => ['ziel' => 'guesttoilet', 'label' => 'Ausstattung: Gäste-WC', 'art' => self::BOOL, 'bereich' => 'listing'],
-        'ausstattung.barrierefrei' => ['ziel' => 'barrierfree', 'label' => 'Ausstattung: Barrierefrei', 'art' => self::BOOL, 'bereich' => 'listing'],
+        'ausstattung.badewanne' => ['ziel' => null, 'label' => 'Ausstattung: Badewanne', 'art' => self::BOOL, 'bereich' => 'listing'],
+        'ausstattung.dusche' => ['ziel' => null, 'label' => 'Ausstattung: Dusche', 'art' => self::BOOL, 'bereich' => 'listing'],
+        'ausstattung.tageslichtbad' => ['ziel' => null, 'label' => 'Ausstattung: Tageslichtbad', 'art' => self::BOOL, 'bereich' => 'listing'],
+        'ausstattung.fussbodenheizung' => ['ziel' => null, 'label' => 'Ausstattung: Fußbodenheizung', 'art' => self::BOOL, 'bereich' => 'listing'],
+        'ausstattung.rollladen' => ['ziel' => null, 'label' => 'Ausstattung: Rollläden', 'art' => self::BOOL, 'bereich' => 'listing'],
         'ausstattung.moebliert' => ['ziel' => null, 'label' => 'Ausstattung: Möbliert', 'art' => self::BOOL, 'bereich' => 'listing'],
-        'ausstattung.wg_geeignet' => ['ziel' => null, 'label' => 'Ausstattung: WG-geeignet', 'art' => self::BOOL, 'bereich' => 'listing'],
+        'ausstattung.stufenlos' => ['ziel' => null, 'label' => 'Ausstattung: Stufenlos erreichbar', 'art' => self::BOOL, 'bereich' => 'listing'],
+        // Nachfolger des älteren Schlüssels "barrierefrei" (Merkmale::ALIASE); Zielfeld wie bisher barrierfree, am Konto zu verifizieren.
+        'ausstattung.barrierearm' => ['ziel' => 'barrierfree', 'label' => 'Ausstattung: Barrierearm', 'art' => self::BOOL, 'bereich' => 'listing'],
+        'ausstattung.rollstuhlgeeignet' => ['ziel' => null, 'label' => 'Ausstattung: Rollstuhlgeeignet', 'art' => self::BOOL, 'bereich' => 'listing'],
         'ausstattung.haustiere_erlaubt' => ['ziel' => null, 'label' => 'Ausstattung: Haustiere erlaubt', 'art' => self::BOOL, 'bereich' => 'listing'],
+        'ausstattung.wg_geeignet' => ['ziel' => null, 'label' => 'Ausstattung: WG-geeignet', 'art' => self::BOOL, 'bereich' => 'listing'],
         'stellplatz_typ' => ['ziel' => 'parking', 'label' => 'Stellplatztyp', 'art' => self::CODE, 'gruppe' => 'stellplatz_typ', 'bereich' => 'listing'],
         'stellplatz_anzahl' => ['ziel' => null, 'label' => 'Stellplatzanzahl', 'art' => self::ZAHL, 'bereich' => 'listing'],
         'beschreibung_objekt' => ['ziel' => null, 'label' => 'Objektbeschreibung', 'art' => self::TEXT, 'bereich' => 'listing'],
@@ -178,11 +219,19 @@ final class FieldCatalog
      */
     public const array CODES = [
         'objektart' => [
-            'wohnung' => '01ETAG',   // Etagenwohnung als Standard, änderbar
+            'wohnung' => '01ETAG',          // Etagenwohnung als Standard, änderbar
             'haus' => '02EFH',
-            'gewerbe' => '06B',      // Bürofläche als Standard, änderbar
+            'mehrfamilienhaus' => '02MFH',  // SDK: 02MFH Mehrfamilienhaus
+            'gewerbe' => '06B',             // Bürofläche als Standard ohne Unterart, siehe gewerbe_unterart
             'grundstueck' => '03BE',
-            'stellplatz' => null,    // OFFEN: im SDK-Auszug kein Code, über Schemaabfrage ermitteln
+            'stellplatz' => null,           // OFFEN: im SDK-Auszug kein Code; ohne Code (flowfact.codezuordnung objektart.stellplatz) wird nicht übertragen
+        ],
+        // Gewerbe-Unterart bestimmt den estatetype-Code eines Gewerbeobjekts.
+        'gewerbe_unterart' => [
+            'buero' => '06B',    // SDK: 06B Bürofläche
+            'laden' => '05L',    // SDK: 05L Ladenfläche
+            'lager' => null,     // OFFEN: Code für Lagerfläche am Konto ermitteln
+            'sonstiges' => null, // OFFEN: kein allgemeiner Code belegt
         ],
         'zustand' => [
             'erstbezug' => '01',
@@ -215,6 +264,8 @@ final class FieldCatalog
     public const array UNBESTAETIGTE_CODES = [
         'objektart.stellplatz',
         'zustand.saniert',
+        'gewerbe_unterart.lager',
+        'gewerbe_unterart.sonstiges',
     ];
 
     /**
@@ -234,7 +285,6 @@ final class FieldCatalog
         'energie.status' => EnergieausweisStatus::class,
         'energie.ausweistyp' => Ausweistyp::class,
         'gewerbe_unterart' => GewerbeUnterart::class,
-        'nutzungsstatus' => Nutzungsstatus::class,
         'heizung_waermeabgabe' => Waermeabgabe::class,
         'heizung_warmwasser' => Warmwasserbereitung::class,
         'heizkosten_struktur' => HeizkostenStruktur::class,

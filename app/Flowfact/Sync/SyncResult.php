@@ -12,6 +12,7 @@ final readonly class SyncResult
      * @param  list<string>  $warnungen
      * @param  Throwable|null  $ausnahme  Ursache eines Fehlers, damit Jobs zwischen
      *                                    Ratenbegrenzung, Auth-Fehler und Transportfehler unterscheiden können
+     * @param  int|null  $releaseId  Freigabeversion, die übertragen wurde (Masterprompt-Abgleich B.6)
      */
     public function __construct(
         public bool $ok,
@@ -20,6 +21,7 @@ final readonly class SyncResult
         public array $warnungen = [],
         public bool $busy = false,
         public ?Throwable $ausnahme = null,
+        public ?int $releaseId = null,
     ) {}
 
     public static function busy(): self

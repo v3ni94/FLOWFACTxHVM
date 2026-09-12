@@ -44,6 +44,7 @@ final class Regression01StatusBleibtBereitTest extends FlowfactTestCase
         $listing = $this->bereitesListing(['status' => $status]);
         $listing->media()->update(['flowfact_multimedia_id' => '101', 'flowfact_titel' => 'Titelbild']);
         $listing = $listing->fresh(['price', 'energy', 'media']);
+        $release = $this->freigeben($listing, ['portal-is24', 'portal-openimmo']);
 
         ListingFlowfactLink::factory()->create([
             'listing_id' => $listing->id,
@@ -51,6 +52,7 @@ final class Regression01StatusBleibtBereitTest extends FlowfactTestCase
             'flowfact_schema' => self::SCHEMA_MIETE,
             'sync_status' => SyncStatus::Uebertragen,
             'uebertragener_inhalt_hash' => app(ListingContentHasher::class)->hash($listing),
+            'release_id' => $release->id,
             'letzte_uebertragung_at' => now(),
         ]);
 
@@ -150,9 +152,9 @@ final class Regression01StatusBleibtBereitTest extends FlowfactTestCase
         self::assertSame(1, $fake->count('POST', self::PUBLISH), 'OFFLINE wird auch für "unbekannt" gesendet.');
         self::assertSame('OFFLINE', $fake->requests('POST', self::PUBLISH)[0]->data()['entries'][0]['targetStatus']);
 
-        // Rücklesen ohne Eintrag: zurückgezogen; nie bestätigt aktiv, daher zurück nach bereit.
+        // Rücklesen ohne Eintrag: Deaktivierung bestätigt; nie bestätigt aktiv, daher zurück nach bereit.
         $service->refreshStatus($listing);
-        self::assertSame(PortalStatus::Zurueckgezogen, ListingPortalPublication::query()->first()->status);
+        self::assertSame(PortalStatus::DeaktivierungBestaetigt, ListingPortalPublication::query()->first()->status);
         self::assertSame(ListingStatus::Bereit, $listing->fresh()->status);
     }
 

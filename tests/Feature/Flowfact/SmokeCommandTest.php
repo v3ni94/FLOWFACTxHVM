@@ -96,6 +96,11 @@ final class SmokeCommandTest extends FlowfactTestCase
         self::assertCount(1, $create);
         self::assertMatchesRegularExpression('/^TEST-\d{8}-\d{6}$/', $create[0]->data()['identifier']['values'][0]);
         self::assertTrue($create[0]->hasHeader('x-ff-version', '2'));
+        // Payload aus der Wegwerf-Freigabe über den Mapper (B.6): Werteform wie im Betrieb.
+        self::assertSame(['values' => ['01ETAG']], $create[0]->data()['estatetype']);
+        self::assertSame(['values' => ['active']], $create[0]->data()['status']);
+        self::assertSame('Teststraße 1', $create[0]->data()['addresses']['values'][0]['street']);
+        self::assertSame(['values' => ['Test geändert']], $fake->requests('PATCH', '#^/entity-service/schemas/[^/]+/entities/[^/]+$#')[0]->data()['headline']);
 
         $upload = $fake->requests('PUT', '#^/flowfact-media/upload/#');
         self::assertCount(1, $upload);
@@ -109,7 +114,11 @@ final class SmokeCommandTest extends FlowfactTestCase
 
         $protokoll = File::get((File::glob(storage_path('logs/flowfact-smoke-*.md')) ?: [])[0]);
         self::assertStringContainsString('| 15 | POST /publish | entfällt |', $protokoll);
+        self::assertStringContainsString('| 15a | showAddress bei Adressfreigabe "nur PLZ und Ort" | zu verifizieren |', $protokoll);
+        self::assertStringContainsString('showAddress=false', $protokoll);
+        self::assertStringContainsString('| 15b | Fall B, Deaktivierung, Rücklesen | nicht getestet |', $protokoll);
         self::assertStringContainsString('| 17 |', $protokoll);
+        self::assertStringContainsString('Wegwerf-Freigabe', $protokoll);
     }
 
     public function test_publish_kann_nicht_ueber_eine_option_aktiviert_werden(): void

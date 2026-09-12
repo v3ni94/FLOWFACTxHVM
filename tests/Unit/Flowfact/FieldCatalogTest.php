@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Unit\Flowfact;
 
+use App\Domain\Listing\Merkmale;
 use App\Domain\Listing\PublishableFields;
 use App\Flowfact\Mapping\FieldCatalog;
 use PHPUnit\Framework\TestCase;
@@ -23,6 +24,16 @@ final class FieldCatalogTest extends TestCase
         foreach (PublishableFields::ENERGY as $feld) {
             self::assertArrayHasKey('energie.'.$feld, FieldCatalog::FELDER, "Energiefeld {$feld} fehlt im FieldCatalog.");
         }
+    }
+
+    public function test_alle_merkmale_haben_einen_katalogeintrag(): void
+    {
+        foreach (Merkmale::schluessel() as $schluessel) {
+            self::assertContains($schluessel, FieldCatalog::AUSSTATTUNG_SCHLUESSEL, "Merkmal {$schluessel} fehlt in AUSSTATTUNG_SCHLUESSEL.");
+            self::assertArrayHasKey('ausstattung.'.$schluessel, FieldCatalog::FELDER, "Merkmal {$schluessel} fehlt im FieldCatalog.");
+        }
+
+        self::assertSame('barrierfree', FieldCatalog::FELDER['ausstattung.barrierearm']['ziel']);
     }
 
     public function test_der_katalog_kennt_keine_internen_felder(): void
@@ -51,9 +62,17 @@ final class FieldCatalogTest extends TestCase
 
         self::assertSame('01ETAG', $codes['objektart']['wohnung']);
         self::assertSame('02EFH', $codes['objektart']['haus']);
+        self::assertSame('02MFH', $codes['objektart']['mehrfamilienhaus']);
         self::assertSame('06B', $codes['objektart']['gewerbe']);
         self::assertSame('03BE', $codes['objektart']['grundstueck']);
         self::assertNull($codes['objektart']['stellplatz']);
+        self::assertSame('06B', $codes['gewerbe_unterart']['buero']);
+        self::assertSame('05L', $codes['gewerbe_unterart']['laden']);
+        self::assertNull($codes['gewerbe_unterart']['lager']);
+        self::assertContains('gewerbe_unterart.lager', FieldCatalog::UNBESTAETIGTE_CODES);
+        self::assertSame('commercialarea', FieldCatalog::FELDER['gewerbeflaeche_qm']['ziel']);
+        self::assertSame('let', FieldCatalog::FELDER['nutzungsstatus']['ziel']);
+        self::assertSame(FieldCatalog::VERMIETET_FLAG, FieldCatalog::FELDER['nutzungsstatus']['art']);
         self::assertSame('07', $codes['zustand']['gepflegt']);
         self::assertSame('01', $codes['effizienzklasse']['A+']);
         self::assertSame('09', $codes['effizienzklasse']['H']);

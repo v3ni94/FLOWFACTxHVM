@@ -89,7 +89,7 @@ final class AnthropicTextGenerator implements TextGenerator
         } catch (Throwable $exception) {
             $dauerMs = $this->dauerMs($begonnenAt);
             $fehler = $this->mapException($exception);
-            $this->recordUsage($listing, $modell, 0, 0, $dauerMs, false, $fehler->getMessage());
+            $this->recordUsage($listing, $modell, 0, 0, $dauerMs, false, $fehler->getMessage(), 'entwurf');
 
             throw $fehler;
         }
@@ -100,27 +100,31 @@ final class AnthropicTextGenerator implements TextGenerator
 
         if ($message->stopReason === 'refusal') {
             $fehler = 'Der KI-Anbieter hat die Anfrage abgelehnt.';
-            $this->recordUsage($listing, $modell, $inputTokens, $outputTokens, $dauerMs, false, $fehler);
+            $this->recordUsage($listing, $modell, $inputTokens, $outputTokens, $dauerMs, false, $fehler, 'entwurf');
 
             throw new TextGenerationException($fehler);
         }
 
         if ($message->stopReason === 'max_tokens') {
             $fehler = 'Die Antwort des KI-Anbieters wurde wegen der Längenbegrenzung abgeschnitten.';
-            $this->recordUsage($listing, $modell, $inputTokens, $outputTokens, $dauerMs, false, $fehler);
+            $this->recordUsage($listing, $modell, $inputTokens, $outputTokens, $dauerMs, false, $fehler, 'entwurf');
 
             throw new TextGenerationException($fehler);
         }
 
         try {
             $ergebnis = $this->parseAntwort($this->ersterTextblock($message), $felder);
+            // Masterprompt-Abgleich B.7: letzte Sicherung, falls der Anbieter
+            // trotz ausgeblendeter Adresse Straße oder Hausnummer erfindet
+            // oder aus dem Kontext übernimmt.
+            HiddenAddressGuard::pruefe($listing, $ergebnis);
         } catch (TextGenerationException $exception) {
-            $this->recordUsage($listing, $modell, $inputTokens, $outputTokens, $dauerMs, false, $exception->getMessage());
+            $this->recordUsage($listing, $modell, $inputTokens, $outputTokens, $dauerMs, false, $exception->getMessage(), 'entwurf');
 
             throw $exception;
         }
 
-        $this->recordUsage($listing, $modell, $inputTokens, $outputTokens, $dauerMs, true, null);
+        $this->recordUsage($listing, $modell, $inputTokens, $outputTokens, $dauerMs, true, null, 'entwurf');
 
         return $ergebnis;
     }
@@ -328,11 +332,13 @@ final class AnthropicTextGenerator implements TextGenerator
         int $dauerMs,
         bool $erfolgreich,
         ?string $fehler,
+        ?string $zweck = null,
     ): void {
         KiUsage::create([
             'user_id' => Auth::id(),
             'listing_id' => $listing?->id,
             'modell' => $modell,
+            'zweck' => $zweck,
             'input_tokens' => $inputTokens,
             'output_tokens' => $outputTokens,
             'dauer_ms' => $dauerMs,

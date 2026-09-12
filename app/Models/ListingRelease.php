@@ -11,6 +11,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Support\Carbon;
 
 /**
  * Freigabeversion eines Objekts (Masterprompt-Abgleich B.6). Eine Version
@@ -25,6 +26,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * @property list<string> $portale_json
  * @property string $inhalt_hash
  * @property int|null $freigegeben_von_user_id
+ * @property Carbon $freigegeben_at
  * @property ReleaseAktion $aktion
  */
 class ListingRelease extends Model
@@ -71,6 +73,26 @@ class ListingRelease extends Model
     public function portalStatusLogs(): HasMany
     {
         return $this->hasMany(ListingPortalStatusLog::class, 'release_id');
+    }
+
+    /**
+     * Veröffentlichungen, die mit dieser Version angefordert wurden.
+     *
+     * @return HasMany<ListingPortalPublication, $this>
+     */
+    public function portalPublications(): HasMany
+    {
+        return $this->hasMany(ListingPortalPublication::class, 'release_id');
+    }
+
+    /**
+     * Portal-IDs dieser Version als Liste von Zeichenketten.
+     *
+     * @return list<string>
+     */
+    public function portalIds(): array
+    {
+        return array_values(array_map('strval', is_array($this->portale_json) ? $this->portale_json : []));
     }
 
     /**

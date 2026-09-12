@@ -4,21 +4,31 @@ declare(strict_types=1);
 
 namespace App\Flowfact\Mapping;
 
+use App\Domain\Listing\ListingSnapshot;
+use App\Domain\Listing\Merkmale;
 use App\Domain\Listing\PublishableFields;
+use App\Enums\AdressFreigabe;
+use App\Enums\GewerbeUnterart;
 use App\Enums\MerkmalWert;
+use App\Enums\Objektart;
 use App\Models\Listing;
 use BackedEnum;
 use DateTimeInterface;
 
 /**
- * Listing -> FLOWFACT-Werteform { feld: { values: [wert] } }
- * (docs/connector.md Abschnitt 4, ADR-003).
+ * Freigabeversion (ListingSnapshot) -> FLOWFACT-Werteform { feld: { values: [wert] } }
+ * (docs/connector.md Abschnitt 4, ADR-003, Masterprompt-Abgleich B.6).
  *
- * WARUM Positivliste: Dieser Mapper liest ausschließlich die Attribute aus
- * PublishableFields::LISTING, PRICE und ENERGY über getAttribute(). Die
- * Relation "internal" wird hier nie angefasst, interne Felder können daher
+ * WARUM Positivliste: Dieser Mapper liest ausschließlich die Schlüssel aus
+ * PublishableFields::LISTING, PRICE und ENERGY aus der Momentaufnahme. Die
+ * Relation "internal" wird nie angefasst, interne Felder können daher
  * technisch nicht in die Übertragung gelangen. Ein Test mit Markerwerten
  * belegt das.
+ *
+ * WARUM Momentaufnahme: Übertragung und Veröffentlichung arbeiten mit der
+ * jüngsten Freigabeversion, nie mit dem Live-Stand (Masterprompt Abschnitt 19,
+ * 23). map(Listing) bleibt als dünne Hülle erhalten, die die Momentaufnahme
+ * aus dem Live-Stand bildet (Vorschau, Tests).
  */
 final class FlowfactPayloadMapper
 {
@@ -27,26 +37,46 @@ final class FlowfactPayloadMapper
     /** @var list<string> */
     private array $leereFelder = [];
 
+    private ?string $blockiert = null;
+
     public function __construct(
         private readonly FieldMappingResolver $resolver,
     ) {}
 
     public function map(Listing $listing): MappedPayload
     {
+        $listing->loadMissing(['price', 'energy', 'media']);
+
+        return $this->mapSnapshot(ListingSnapshot::fromListing($listing));
+    }
+
+    public function mapSnapshot(ListingSnapshot $snapshot): MappedPayload
+    {
         $fields = [];
         $warnungen = [];
         $adresse = [];
         $this->leereFelder = [];
+        $this->blockiert = null;
+
+        $daten = $snapshot->listing;
 
         foreach (PublishableFields::LISTING as $feld) {
-            $this->verarbeite($feld, $listing->getAttribute($feld), $fields, $warnungen, $adresse);
+            $wert = $daten[$feld] ?? null;
+
+            if ($feld === 'objektart') {
+                $this->objektart($wert, $daten['gewerbe_unterart'] ?? null, $fields, $warnungen);
+
+                continue;
+            }
+
+            $this->verarbeite($feld, $wert, $fields, $warnungen, $adresse);
         }
 
-        $price = $listing->price;
-        $heizkostenEnthalten = (bool) $price?->getAttribute('heizkosten_in_nebenkosten_enthalten');
+        $price = $snapshot->price;
+        $heizkostenEnthalten = (bool) ($price['heizkosten_in_nebenkosten_enthalten'] ?? false);
 
         foreach (PublishableFields::PRICE as $feld) {
-            $wert = $price?->getAttribute($feld);
+            $wert = $price[$feld] ?? null;
 
             // Prüfbericht 2026-09-11, Befund 13: Sind die Heizkosten in den
             // Nebenkosten enthalten (Fall B), gehen sie nicht zusätzlich als
@@ -59,10 +89,10 @@ final class FlowfactPayloadMapper
             $this->verarbeite($feld, $wert, $fields, $warnungen, $adresse);
         }
 
-        $energy = $listing->energy;
+        $energy = $snapshot->energy;
 
         foreach (PublishableFields::ENERGY as $feld) {
-            $this->verarbeite('energie.'.$feld, $energy?->getAttribute($feld), $fields, $warnungen, $adresse);
+            $this->verarbeite('energie.'.$feld, $energy[$feld] ?? null, $fields, $warnungen, $adresse);
         }
 
         $this->adresse($adresse, $fields, $warnungen);
@@ -79,9 +109,97 @@ final class FlowfactPayloadMapper
         return new MappedPayload(
             fields: $fields,
             warnungen: array_values(array_unique($warnungen)),
-            showAddress: (bool) $listing->getAttribute('adresse_im_inserat_anzeigen'),
+            showAddress: $this->showAddress($daten),
             leereFelder: $leereFelder,
+            blockiert: $this->blockiert,
         );
+    }
+
+    /**
+     * Adressfreigabe steuert showAddress im Publish-Request (Masterprompt-
+     * Abgleich B.2, B.7). Die Adresse selbst wird immer übertragen; bei
+     * "nur PLZ und Ort" verbirgt FLOWFACT die Straße über showAddress
+     * (am Konto zu verifizieren, docs/flowfact-api.md Abschnitt 9).
+     *
+     * @param  array<string, mixed>  $daten
+     */
+    private function showAddress(array $daten): bool
+    {
+        $freigabe = $daten['adress_freigabe'] ?? null;
+
+        if ($freigabe instanceof AdressFreigabe) {
+            return $freigabe->adresseAnzeigen();
+        }
+
+        if (is_string($freigabe) && AdressFreigabe::tryFrom($freigabe) !== null) {
+            return AdressFreigabe::from($freigabe)->adresseAnzeigen();
+        }
+
+        return (bool) ($daten['adresse_im_inserat_anzeigen'] ?? true);
+    }
+
+    /**
+     * estatetype aus Objektart und Gewerbe-Unterart (docs/connector.md 4.3,
+     * Masterprompt-Abgleich B.2). Gewerbe: Unterart bestimmt den Code (Büro
+     * 06B, Laden 05L, Lager und Sonstiges offen). Stellplatz ohne Code sperrt
+     * die Übertragung, weil FLOWFACT ohne estatetype kein sinnvolles Objekt
+     * erhält; über flowfact.codezuordnung (objektart.stellplatz) wird sie
+     * möglich.
+     *
+     * @param  array<string, array{values: list<mixed>}>  $fields
+     * @param  list<string>  $warnungen
+     */
+    private function objektart(mixed $objektart, mixed $unterart, array &$fields, array &$warnungen): void
+    {
+        $definition = FieldCatalog::FELDER['objektart'];
+        $ziel = $this->resolver->zielfeld('objektart');
+        $objektartWert = $objektart instanceof BackedEnum ? (string) $objektart->value : (is_scalar($objektart) ? (string) $objektart : '');
+
+        if ($objektartWert === '') {
+            if ($ziel !== null) {
+                $this->leereFelder[] = $ziel;
+            }
+
+            return;
+        }
+
+        if ($ziel === null) {
+            $warnungen[] = 'Keine FLOWFACT-Zuordnung für '.$definition['label'];
+
+            return;
+        }
+
+        $unterartWert = $unterart instanceof BackedEnum ? (string) $unterart->value : (is_scalar($unterart) ? (string) $unterart : '');
+
+        if ($objektartWert === Objektart::Gewerbe->value && $unterartWert !== '') {
+            $code = $this->resolver->code('gewerbe_unterart', $unterartWert);
+
+            if ($code === null) {
+                $warnungen[] = $unterartWert === GewerbeUnterart::Lager->value
+                    ? FieldCatalog::WARNUNG_LAGER
+                    : sprintf('Kein FLOWFACT-Code für %s (%s)', FieldCatalog::label('gewerbe_unterart'), FieldCatalog::codeLabel('gewerbe_unterart', $unterartWert));
+
+                return;
+            }
+
+            $fields[$ziel] = ['values' => [$code]];
+
+            return;
+        }
+
+        $code = $this->resolver->code('objektart', $objektartWert);
+
+        if ($code === null) {
+            $warnungen[] = sprintf('Kein FLOWFACT-Code für %s (%s)', $definition['label'], FieldCatalog::codeLabel('objektart', $objektartWert));
+
+            if ($objektartWert === Objektart::Stellplatz->value) {
+                $this->blockiert = FieldCatalog::MELDUNG_STELLPLATZ;
+            }
+
+            return;
+        }
+
+        $fields[$ziel] = ['values' => [$code]];
     }
 
     /**
@@ -116,9 +234,15 @@ final class FlowfactPayloadMapper
                 foreach (FieldCatalog::AUSSTATTUNG_SCHLUESSEL as $schluessel) {
                     // Dreiwertig (Masterprompt-Abgleich B.2, B.8): ältere boolesche
                     // Werte bleiben lesbar, "unbekannt" wird weder als ja noch
-                    // als nein übertragen (null, wie ein leeres Feld).
-                    $this->verarbeite('ausstattung.'.$schluessel, MerkmalWert::aus($merkmale[$schluessel] ?? null)->alsBool(), $fields, $warnungen, $adresse);
+                    // als nein übertragen (null, wie ein leeres Feld). Umbenannte
+                    // Merkmale lesen den älteren Schlüssel (Merkmale::ALIASE).
+                    $this->verarbeite('ausstattung.'.$schluessel, $this->merkmal($merkmale, $schluessel)->alsBool(), $fields, $warnungen, $adresse);
                 }
+
+                return;
+
+            case FieldCatalog::VERMIETET_FLAG:
+                $this->vermietetFlag($feld, $wert, $fields);
 
                 return;
         }
@@ -156,6 +280,48 @@ final class FlowfactPayloadMapper
     }
 
     /**
+     * @param  array<string, mixed>  $merkmale
+     */
+    private function merkmal(array $merkmale, string $schluessel): MerkmalWert
+    {
+        if (array_key_exists($schluessel, $merkmale)) {
+            return MerkmalWert::aus($merkmale[$schluessel]);
+        }
+
+        $alias = Merkmale::ALIASE[$schluessel] ?? null;
+
+        if ($alias !== null && array_key_exists($alias, $merkmale)) {
+            return MerkmalWert::aus($merkmale[$alias]);
+        }
+
+        return MerkmalWert::Unbekannt;
+    }
+
+    /**
+     * Nutzungsstatus: vermietet -> let true, leerstehend -> let false, alles
+     * andere (anderweitig belegt, unbekannt) wird nicht gesendet und nicht
+     * gelöscht, weil daraus kein boolescher Wert folgt.
+     *
+     * @param  array<string, array{values: list<mixed>}>  $fields
+     */
+    private function vermietetFlag(string $feld, mixed $wert, array &$fields): void
+    {
+        $ziel = $this->resolver->zielfeld($feld);
+
+        if ($ziel === null) {
+            return;
+        }
+
+        $status = $wert instanceof BackedEnum ? (string) $wert->value : (is_scalar($wert) ? (string) $wert : '');
+
+        if (! array_key_exists($status, FieldCatalog::NUTZUNGSSTATUS_LET)) {
+            return;
+        }
+
+        $fields[$ziel] = ['values' => [FieldCatalog::NUTZUNGSSTATUS_LET[$status]]];
+    }
+
+    /**
      * @param  array{ziel: string|null, label: string, art: string, gruppe?: string, bereich: string}  $definition
      * @param  list<string>  $warnungen
      */
@@ -166,7 +332,7 @@ final class FlowfactPayloadMapper
             FieldCatalog::ZAHL => $this->zahl($wert),
             FieldCatalog::EURO => round(((int) $wert) / 100, 2),
             FieldCatalog::BOOL => (bool) $wert,
-            FieldCatalog::DATUM => $wert instanceof DateTimeInterface ? $wert->format('Y-m-d') : $this->text($wert),
+            FieldCatalog::DATUM => $this->datum($wert),
             FieldCatalog::CODE => $this->code($definition, $wert, $warnungen),
             default => null,
         };
@@ -181,6 +347,25 @@ final class FlowfactPayloadMapper
         $text = trim((string) $wert);
 
         return $text === '' ? null : $text;
+    }
+
+    /**
+     * Datum als Y-m-d. Die Momentaufnahme speichert Datumswerte im ATOM-Format
+     * (ListingSnapshot::normalisiert), daher genügt der Datumsanteil.
+     */
+    private function datum(mixed $wert): ?string
+    {
+        if ($wert instanceof DateTimeInterface) {
+            return $wert->format('Y-m-d');
+        }
+
+        $text = $this->text($wert);
+
+        if ($text !== null && preg_match('/^\d{4}-\d{2}-\d{2}/', $text) === 1) {
+            return substr($text, 0, 10);
+        }
+
+        return $text;
     }
 
     private function zahl(mixed $wert): int|float

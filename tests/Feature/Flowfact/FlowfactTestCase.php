@@ -4,11 +4,15 @@ declare(strict_types=1);
 
 namespace Tests\Feature\Flowfact;
 
+use App\Domain\Listing\ReleaseService;
 use App\Domain\Settings\SettingsRepository;
 use App\Enums\ListingStatus;
+use App\Enums\ReleaseAktion;
 use App\Flowfact\Client\SettingsTokenProvider;
 use App\Flowfact\Sync\ListingSyncService;
 use App\Models\Listing;
+use App\Models\ListingRelease;
+use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Tests\Feature\Flowfact\Support\FakeFlowfact;
@@ -66,6 +70,26 @@ abstract class FlowfactTestCase extends TestCase
         ], $attributes));
 
         return $listing->fresh(['price', 'energy', 'media']);
+    }
+
+    /**
+     * Freigabeversion wie im Schritt Prüfen und veröffentlichen
+     * (Masterprompt-Abgleich B.6): Übertragung und Veröffentlichung arbeiten
+     * ausschließlich mit der jüngsten Version.
+     *
+     * @param  list<string>  $portalIds
+     */
+    protected function freigeben(Listing $listing, array $portalIds = ['portal-is24', 'portal-openimmo'], ?ReleaseAktion $aktion = null, ?User $user = null): ListingRelease
+    {
+        $aktion ??= $portalIds === [] ? ReleaseAktion::FlowfactSpeichern : ReleaseAktion::Veroeffentlichen;
+        $user ??= User::factory()->create();
+
+        $release = app(ReleaseService::class)->freigeben($listing->fresh(['price', 'energy', 'media']), $user, $aktion, $portalIds);
+
+        $listing->unsetRelation('latestRelease');
+        $listing->unsetRelation('releases');
+
+        return $release;
     }
 
     /**

@@ -188,6 +188,98 @@ final class MediaUploadServiceTest extends TestCase
         $this->assertNull($service->vorschauPfad($medium));
     }
 
+    /**
+     * Masterprompt Abschnitt 14: SVG und andere Vektor- oder sonstige
+     * Bildformate sind über die Mime-Positivliste bereits ausgeschlossen; die
+     * Ablehnung erfolgt mit einer klaren deutschen Meldung.
+     */
+    public function test_eine_svg_datei_wird_abgelehnt(): void
+    {
+        Storage::fake('media');
+        $listing = Listing::factory()->create();
+        $service = new MediaUploadService;
+
+        $pfad = tempnam(sys_get_temp_dir(), 'flowsvg');
+        file_put_contents($pfad, '<?xml version="1.0"?><svg xmlns="http://www.w3.org/2000/svg"><circle r="5"/></svg>');
+        $datei = new UploadedFile($pfad, 'grundriss.svg', 'image/svg+xml', null, true);
+
+        $this->expectException(MediaUploadException::class);
+        $this->expectExceptionMessage('nicht unterstützten Dateityp');
+
+        $service->store($listing, $datei, MediaTyp::Bild);
+    }
+
+    /**
+     * Masterprompt Abschnitt 14: enthält ein hochgeladenes JPEG einen
+     * GPS-EXIF-Block, wird das Flag enthaelt_standortdaten gesetzt, damit die
+     * Oberfläche darauf hinweisen kann, dass die Angaben beim Export entfernt
+     * werden.
+     */
+    public function test_ein_jpeg_mit_gps_exif_wird_als_standortdaten_enthaltend_markiert(): void
+    {
+        Storage::fake('media');
+        $listing = Listing::factory()->create();
+        $service = new MediaUploadService;
+
+        $pfad = tempnam(sys_get_temp_dir(), 'flowgps').'.jpg';
+        file_put_contents($pfad, self::jpegMitGpsExif());
+        $datei = new UploadedFile($pfad, 'standort.jpg', 'image/jpeg', null, true);
+
+        $medium = $service->store($listing, $datei, MediaTyp::Bild);
+
+        self::assertTrue($medium->enthaelt_standortdaten);
+    }
+
+    public function test_ein_jpeg_ohne_exif_wird_nicht_als_standortdaten_enthaltend_markiert(): void
+    {
+        Storage::fake('media');
+        $listing = Listing::factory()->create();
+        $service = new MediaUploadService;
+
+        $medium = $service->store($listing, UploadedFile::fake()->image('ohne-exif.jpg', 400, 300), MediaTyp::Bild);
+
+        self::assertFalse($medium->enthaelt_standortdaten);
+    }
+
+    /**
+     * Erzeugt ein gültiges JPEG (über GD) und fügt unmittelbar nach dem
+     * SOI-Marker einen minimalen APP1-EXIF-Block mit GPS-IFD ein
+     * (GPSLatitudeRef "N", GPSLatitude 51/1 0/1 0/1), damit exif_read_data
+     * einen GPS-Abschnitt liefert.
+     */
+    private static function jpegMitGpsExif(): string
+    {
+        $bild = imagecreatetruecolor(4, 4);
+        ob_start();
+        imagejpeg($bild, null, 90);
+        $jpeg = (string) ob_get_clean();
+        imagedestroy($bild);
+
+        // TIFF-Header (Intel/little-endian), IFD0 mit einem Verweis auf die
+        // GPS-IFD (Tag 0x8825), GPS-IFD mit GPSLatitudeRef und GPSLatitude.
+        $tiffHeader = 'II'.pack('v', 42).pack('V', 8);
+
+        $ifd0 = pack('v', 1)
+            .pack('v', 0x8825).pack('v', 4).pack('V', 1).pack('V', 26)
+            .pack('V', 0);
+
+        $gpsLatitudeRefWert = "N\x00\x00\x00";
+        $gpsIfd = pack('v', 2)
+            .pack('v', 1).pack('v', 2).pack('V', 2).$gpsLatitudeRefWert
+            .pack('v', 2).pack('v', 5).pack('V', 3).pack('V', 56)
+            .pack('V', 0);
+
+        $gpsLatitudeDaten = pack('V', 51).pack('V', 1).pack('V', 0).pack('V', 1).pack('V', 0).pack('V', 1);
+
+        $tiff = $tiffHeader.$ifd0.$gpsIfd.$gpsLatitudeDaten;
+        $exifPayload = "Exif\x00\x00".$tiff;
+        $app1 = "\xFF\xE1".pack('n', strlen($exifPayload) + 2).$exifPayload;
+
+        // Direkt nach dem SOI-Marker (erste zwei Byte) einfügen, vor allen
+        // vom GD-Encoder erzeugten Markern.
+        return substr($jpeg, 0, 2).$app1.substr($jpeg, 2);
+    }
+
     public function test_delete_entfernt_original_und_vorschau_und_den_datensatz(): void
     {
         Storage::fake('media');

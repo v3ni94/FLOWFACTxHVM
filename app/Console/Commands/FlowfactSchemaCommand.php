@@ -21,6 +21,11 @@ use Symfony\Component\Console\Command\Command as CommandAlias;
  * Zuordnung fehlt, Zielfeld nicht im Schema (docs/connector.md 4.2). Das
  * Ergebnis wird als JSON in flowfact.schema_cache_<name> abgelegt, damit der
  * Adminbereich die Auswahl der Zielfelder anbieten kann.
+ *
+ * Zusätzlich (Welle 3) die Codes für Objektart und Gewerbe-Unterart mit dem
+ * Stand bestätigt oder offen: Ohne Code für Stellplatz/Garage wird ein
+ * solches Objekt nicht übertragen (flowfact.codezuordnung objektart.stellplatz),
+ * ohne Code für Lagerfläche entfällt der estatetype mit Warnung.
  */
 class FlowfactSchemaCommand extends Command
 {
@@ -98,6 +103,23 @@ class FlowfactSchemaCommand extends Command
         }
 
         $this->table(['Eigenes Feld', 'Bezeichnung', 'Zielfeld', 'Status'], $zeilen);
+
+        $this->newLine();
+        $this->info('Codes für estatetype (Objektart und Gewerbe-Unterart)');
+
+        $codes = $resolver->codes();
+        $codeZeilen = [];
+
+        foreach (['objektart', 'gewerbe_unterart'] as $gruppe) {
+            foreach ($codes[$gruppe] ?? [] as $wert => $eintrag) {
+                $status = $eintrag['code'] === null
+                    ? ($gruppe === 'objektart' && $wert === 'stellplatz' ? 'offen, Übertragung gesperrt' : 'offen, am Konto ermitteln')
+                    : ($eintrag['bestaetigt'] ? 'bestätigt' : 'überschrieben oder unbestätigt');
+                $codeZeilen[] = [$gruppe.'.'.$wert, $eintrag['label'], $eintrag['code'] ?? '', $status];
+            }
+        }
+
+        $this->table(['Gruppe.Wert', 'Bezeichnung', 'Code', 'Status'], $codeZeilen);
 
         return CommandAlias::SUCCESS;
     }

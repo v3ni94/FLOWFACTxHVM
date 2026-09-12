@@ -246,6 +246,33 @@ class CheckConfigCommand extends Command
         }
 
         $this->zeile('FLOWFACT-Token', $tokenHinterlegt, false);
+        $this->zeile('FLOWFACT-Konfliktverhalten', $this->konfliktverhalten(), false);
+    }
+
+    /**
+     * Einstellung flowfact.konfliktverhalten (docs/connector.md Abschnitt 7):
+     * abbrechen (Standard) oder ueberschreiben.
+     */
+    private function konfliktverhalten(): string
+    {
+        try {
+            if (! Schema::hasTable('settings')) {
+                return 'abbrechen (Standard, keine Einstellungen)';
+            }
+
+            $wert = DB::table('settings')->where('key', 'flowfact.konfliktverhalten')->value('value');
+
+            if ($wert === null) {
+                return 'abbrechen (Standard)';
+            }
+
+            $dekodiert = json_decode((string) $wert, true);
+            $text = is_string($dekodiert) ? strtolower(trim($dekodiert)) : '';
+
+            return $text === 'ueberschreiben' ? 'ueberschreiben' : 'abbrechen';
+        } catch (Throwable) {
+            return 'nicht ermittelbar';
+        }
     }
 
     private function zeile(string $bezeichnung, string $wert, bool $istFehler): void

@@ -8,6 +8,10 @@
     </div>
 
     <div class="stack">
+        @if ($vorlagenmodusAktiv)
+            <div class="alert alert-warning" role="status">Vorlagenmodus aktiv, keine externen Aufrufe.</div>
+        @endif
+
         <div class="grid grid-2">
             <div class="card">
                 <div class="card-title">API-Schlüssel</div>
@@ -136,6 +140,41 @@
                             @empty
                                 <tr>
                                     <td colspan="5">
+                                        <div class="empty-state">Noch kein Verbrauch in den letzten 30 Tagen.</div>
+                                    </td>
+                                </tr>
+                            @endforelse
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-title">Verbrauch nach Zweck (letzte 30 Tage)</div>
+            <div class="card-body">
+                <p class="hint">Entwurf: neue Textvorschläge. Überarbeitung: kürzer, sachlicher, sprachlich.</p>
+                <div class="table-wrap">
+                    <table class="table">
+                        <thead>
+                            <tr>
+                                <th>Zweck</th>
+                                <th>Aufrufe</th>
+                                <th>Eingabetoken</th>
+                                <th>Ausgabetoken</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @forelse ($nutzungProZweck as $zeile)
+                                <tr>
+                                    <td>{{ $zeile['label'] }}</td>
+                                    <td>{{ $zeile['aufrufe'] }}</td>
+                                    <td>{{ number_format($zeile['input_tokens'], 0, ',', '.') }}</td>
+                                    <td>{{ number_format($zeile['output_tokens'], 0, ',', '.') }}</td>
+                                </tr>
+                            @empty
+                                <tr>
+                                    <td colspan="4">
                                         <div class="empty-state">Noch kein Verbrauch in den letzten 30 Tagen.</div>
                                     </td>
                                 </tr>

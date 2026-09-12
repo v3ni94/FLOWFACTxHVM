@@ -95,6 +95,7 @@ final class MediaUploadService
 
         $breite = null;
         $hoehe = null;
+        $enthaeltStandortdaten = false;
 
         if (in_array($mime, self::BILD_MIMES, true)) {
             $abmessungen = @getimagesizefromstring($inhalt);
@@ -114,6 +115,8 @@ final class MediaUploadService
             // ImagePreviewGenerator und ImageResizer beim Dekodieren mehrere
             // GB RAM je Datei, unabhängig vom PHP-Speicherlimit.
             $this->pruefePixelgrenze($breite, $hoehe);
+
+            $enthaeltStandortdaten = $this->enthaeltStandortdaten($mime, $file->getRealPath());
         }
 
         $endung = self::ENDUNGEN[$mime] ?? 'bin';
@@ -150,7 +153,27 @@ final class MediaUploadService
             'titel' => null,
             'im_inserat' => true,
             'pruefsumme_sha256' => $pruefsumme,
+            'enthaelt_standortdaten' => $enthaeltStandortdaten,
         ]);
+    }
+
+    /**
+     * Erkennt GPS-Standortdaten im EXIF-Block eines JPEGs (Masterprompt
+     * Abschnitt 14). exif_read_data liest nur JPEG und TIFF; ist die
+     * Erweiterung nicht geladen, wird konservativ "nein" angenommen, statt
+     * den Upload abzulehnen. Die Pixeldaten selbst werden dadurch nicht
+     * verändert; die Vorschau (ImagePreviewGenerator) und die
+     * Connector-Neukodierung entfernen EXIF ohnehin beim Export.
+     */
+    private function enthaeltStandortdaten(string $mime, string|false $pfad): bool
+    {
+        if ($mime !== 'image/jpeg' || $pfad === false || ! extension_loaded('exif')) {
+            return false;
+        }
+
+        $exif = @exif_read_data($pfad, 'GPS', true);
+
+        return is_array($exif) && ! empty($exif['GPS']);
     }
 
     /**

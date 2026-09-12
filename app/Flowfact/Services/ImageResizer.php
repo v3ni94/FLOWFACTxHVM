@@ -10,6 +10,12 @@ use RuntimeException;
  * Bringt Bilder mit GD in Portalgröße (ADR-012): längste Seite höchstens
  * 2000 Pixel, JPEG Qualität 85. PNG mit Transparenz bleibt PNG, alles
  * andere wird JPEG.
+ *
+ * Masterprompt Abschnitt 14: Die im Assistenten erfasste Drehung (0, 90, 180,
+ * 270 Grad im Uhrzeigersinn) wird vor dem Verkleinern eingebrannt. Weil GD
+ * das Bild vollständig neu kodiert, enthält die Ausgabe keine Metadaten der
+ * Quelle (kein EXIF-APP1-Segment, keine GPS- oder Kameradaten); ein Test
+ * belegt das durch Suche nach der Kennung "Exif\0\0" in den Bytes.
  */
 final class ImageResizer
 {
@@ -19,9 +25,10 @@ final class ImageResizer
     ) {}
 
     /**
+     * @param  int  $rotation  Drehung im Uhrzeigersinn in Grad (0, 90, 180, 270)
      * @return array{content: string, mime: string, extension: string, width: int, height: int}
      */
-    public function resize(string $binary, string $mime): array
+    public function resize(string $binary, string $mime, int $rotation = 0): array
     {
         // GD meldet unlesbare Daten als Warnung; hier soll eine Ausnahme entstehen.
         set_error_handler(static fn (): bool => true);
@@ -36,11 +43,12 @@ final class ImageResizer
             throw new RuntimeException('Die Bilddatei konnte nicht gelesen werden.');
         }
 
+        $transparent = $mime === 'image/png' && $this->hatTransparenz($binary);
+        $bild = $this->drehen($bild, $rotation, $transparent);
+
         $breite = imagesx($bild);
         $hoehe = imagesy($bild);
         $laengste = max($breite, $hoehe);
-
-        $transparent = $mime === 'image/png' && $this->hatTransparenz($binary);
 
         if ($laengste > $this->maxSide) {
             $faktor = $this->maxSide / $laengste;
@@ -82,6 +90,38 @@ final class ImageResizer
         imagedestroy($bild);
 
         return $ausgabe + ['content' => $inhalt, 'width' => $breite, 'height' => $hoehe];
+    }
+
+    /**
+     * Drehung im Uhrzeigersinn. imagerotate() dreht gegen den Uhrzeigersinn,
+     * daher wird der Gegenwinkel übergeben. Unbekannte Werte gelten als 0.
+     */
+    private function drehen(\GdImage $bild, int $rotation, bool $transparent): \GdImage
+    {
+        $rotation = (($rotation % 360) + 360) % 360;
+
+        if (! in_array($rotation, [90, 180, 270], true)) {
+            return $bild;
+        }
+
+        $hintergrund = $transparent
+            ? imagecolorallocatealpha($bild, 0, 0, 0, 127)
+            : imagecolorallocate($bild, 255, 255, 255);
+
+        $gedreht = imagerotate($bild, (float) (360 - $rotation), (int) $hintergrund);
+
+        if ($gedreht === false) {
+            throw new RuntimeException('Die Bilddatei konnte nicht gedreht werden.');
+        }
+
+        imagedestroy($bild);
+
+        if ($transparent) {
+            imagealphablending($gedreht, false);
+            imagesavealpha($gedreht, true);
+        }
+
+        return $gedreht;
     }
 
     /**

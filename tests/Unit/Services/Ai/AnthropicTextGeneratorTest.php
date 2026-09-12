@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Tests\Unit\Services\Ai;
 
 use App\Domain\Settings\SettingsRepository;
+use App\Enums\AdressFreigabe;
 use App\Enums\TextFeld;
 use App\Models\KiUsage;
 use App\Models\Listing;
@@ -45,6 +46,7 @@ final class AnthropicTextGeneratorTest extends TestCase
 
         $this->assertDatabaseHas('ki_usages', [
             'listing_id' => $listing->id,
+            'zweck' => 'entwurf',
             'input_tokens' => 120,
             'output_tokens' => 45,
             'erfolgreich' => true,
@@ -224,6 +226,32 @@ final class AnthropicTextGeneratorTest extends TestCase
         } catch (TextGenerationException $exception) {
             self::assertSame('KI-Anbieter derzeit nicht erreichbar.', $exception->getMessage());
         }
+    }
+
+    /**
+     * Masterprompt-Abgleich B.7: erfindet oder übernimmt der Anbieter trotz
+     * ausgeblendeter Adresse die Straße, wird der gesamte Vorschlag
+     * verworfen und der Verbrauch als Fehlschlag protokolliert.
+     */
+    public function test_eine_ausgeblendete_strasse_in_der_antwort_verwirft_den_vorschlag(): void
+    {
+        $listing = Listing::factory()->create([
+            'adress_freigabe' => AdressFreigabe::NurPlzOrt,
+            'strasse' => 'Geheimstraße',
+            'hausnummer' => '12',
+        ]);
+        $antwort = self::responseWith([
+            'content' => [self::textBlock('{"beschreibung_lage":"Das Objekt liegt in der Geheimstraße."}')],
+        ]);
+
+        try {
+            $this->generator($antwort)->generate($listing, [TextFeld::BeschreibungLage]);
+            self::fail('Es wurde keine Ausnahme geworfen.');
+        } catch (TextGenerationException $exception) {
+            self::assertStringContainsString('ausgeblendete Straße', $exception->getMessage());
+        }
+
+        $this->assertDatabaseHas('ki_usages', ['zweck' => 'entwurf', 'erfolgreich' => false]);
     }
 
     public function test_ohne_hinterlegten_schluessel_wird_eine_ausnahme_geworfen_ohne_aufruf(): void

@@ -11,15 +11,13 @@ use App\Models\Listing;
  * kürzer, sachlicher, sprachlich verbessern. Inhaltliche Aussagen dürfen nicht
  * hinzukommen; der Aufruf erfolgt nur auf Anforderung des Benutzers.
  */
-interface TextReviser
+interface TextReviser extends KiFaehig
 {
     public const string KUERZER = 'kuerzer';
 
     public const string SACHLICHER = 'sachlicher';
 
     public const string SPRACHLICH = 'sprachlich';
-
-    public function isConfigured(): bool;
 
     public function modell(): string;
 

@@ -82,7 +82,7 @@ class ListingTextController extends Controller
             ]);
         }
 
-        $hinweisOhneKi = $generator->modell() === 'fake' ? ' Es handelt sich um Vorlagenentwürfe ohne KI.' : '';
+        $hinweisOhneKi = $generator->modell() === 'vorlage' ? ' Es handelt sich um Vorlagenentwürfe ohne KI.' : '';
 
         return back()->with(
             'status',

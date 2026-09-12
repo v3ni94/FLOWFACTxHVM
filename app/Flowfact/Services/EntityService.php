@@ -25,6 +25,19 @@ final class EntityService extends AbstractService
      */
     public function create(string $schema, array $fields): string
     {
+        return $this->createMitMetadaten($schema, $fields)['id'];
+    }
+
+    /**
+     * Wie create(), zusätzlich mit dem Änderungszeitpunkt der Antwort
+     * (Konflikterkennung, Masterprompt Abschnitt 23). lastModified ist null,
+     * wenn die Antwort nur die ID enthält.
+     *
+     * @param  array<string, mixed>  $fields
+     * @return array{id: string, lastModified: string|null}
+     */
+    public function createMitMetadaten(string $schema, array $fields): array
+    {
         $antwort = $this->client->post(self::SERVICE, '/schemas/{schema}', ['schema' => $schema], $fields, [], ['x-ff-version' => '2']);
 
         $id = $this->extrahiereId($antwort);
@@ -33,7 +46,7 @@ final class EntityService extends AbstractService
             throw new FlowfactException('FLOWFACT hat die Entität angelegt, aber keine ID zurückgegeben. Der nächste Lauf findet sie über die Objektnummer.');
         }
 
-        return $id;
+        return ['id' => $id, 'lastModified' => self::lastModified($antwort)];
     }
 
     /**
@@ -72,6 +85,28 @@ final class EntityService extends AbstractService
         $antwort = $this->client->get(self::SERVICE, '/recovery/entities', [], ['page' => 1, 'size' => $size, 'schema' => $schema]);
 
         return is_array($antwort) ? $antwort : [];
+    }
+
+    /**
+     * Änderungszeitpunkt einer Entität aus _metadata (flowfact-api.md 4.1):
+     * lastModifiedTimestamp, ersatzweise timestamp. Als Zeichenkette, wie
+     * geliefert (Zahl oder Text), null wenn nicht vorhanden.
+     */
+    public static function lastModified(mixed $entity): ?string
+    {
+        if (! is_array($entity) || ! is_array($entity['_metadata'] ?? null)) {
+            return null;
+        }
+
+        foreach (['lastModifiedTimestamp', 'timestamp'] as $schluessel) {
+            $wert = $entity['_metadata'][$schluessel] ?? null;
+
+            if (is_scalar($wert) && (string) $wert !== '') {
+                return (string) $wert;
+            }
+        }
+
+        return null;
     }
 
     private function extrahiereId(mixed $antwort): ?string

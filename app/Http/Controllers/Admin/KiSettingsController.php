@@ -34,16 +34,23 @@ class KiSettingsController extends Controller
     public function edit(SettingsRepository $settings): View
     {
         $modelle = (array) config('ai.models');
+        $provider = $this->text($settings->get('ki.provider')) ?? 'fake';
 
         return view('admin.ki.edit', [
-            'provider' => $this->text($settings->get('ki.provider')) ?? 'fake',
+            'provider' => $provider,
             'modell' => $this->text($settings->get('ki.modell')) ?? (string) config('ai.model'),
             'modelle' => $modelle,
             'apiKeyHinterlegt' => $settings->hasSecret('ki.api_key'),
             'apiKeyHinterlegtAt' => $this->datum($settings->get(self::API_KEY_HINTERLEGT_AT)),
             'verbindungGeprueftAt' => $this->datum($settings->get(self::VERBINDUNG_GEPRUEFT_AT)),
             'verbindungErgebnis' => $this->text($settings->get(self::VERBINDUNG_ERGEBNIS)),
+            // Masterprompt Abschnitt 16: solange der Anbieter nicht "anthropic"
+            // ist oder kein Schlüssel hinterlegt ist, erzeugt der
+            // Vorlagenmodus (FakeTextGenerator/FakeTextReviser) alle Texte
+            // ohne externen Aufruf.
+            'vorlagenmodusAktiv' => $provider !== 'anthropic' || ! $settings->hasSecret('ki.api_key'),
             'nutzungProModell' => $this->nutzungProModell($modelle),
+            'nutzungProZweck' => $this->nutzungProZweck(),
             'letzteNutzungen' => KiUsage::query()->latest('id')->limit(20)->get(),
         ]);
     }
@@ -147,6 +154,42 @@ class KiSettingsController extends Controller
                 'input_tokens' => $inputTokens,
                 'output_tokens' => $outputTokens,
                 'geschaetzte_kosten_usd' => round($kosten, 2),
+            ];
+        })->all();
+    }
+
+    /**
+     * Verbrauch der letzten 30 Tage je Zweck (Masterprompt Abschnitt 16):
+     * "entwurf" (Texterzeugung) und "ueberarbeitung" (kürzer, sachlicher,
+     * sprachlich). Ältere Einträge und der Verbindungstest tragen keinen
+     * Zweck und erscheinen als "ohne Zuordnung".
+     *
+     * @return list<array{zweck: string, label: string, aufrufe: int, input_tokens: int, output_tokens: int}>
+     */
+    private function nutzungProZweck(): array
+    {
+        $zeilen = KiUsage::query()
+            ->where('created_at', '>=', Carbon::now()->subDays(30))
+            ->selectRaw('zweck, count(*) as aufrufe, sum(input_tokens) as summe_input, sum(output_tokens) as summe_output')
+            ->groupBy('zweck')
+            ->orderBy('zweck')
+            ->get();
+
+        $label = static fn (?string $zweck): string => match ($zweck) {
+            'entwurf' => 'Entwurf',
+            'ueberarbeitung' => 'Überarbeitung',
+            default => 'Ohne Zuordnung',
+        };
+
+        return $zeilen->map(function (KiUsage $zeile) use ($label): array {
+            $zweck = $zeile->getAttribute('zweck');
+
+            return [
+                'zweck' => $zweck ?? '',
+                'label' => $label($zweck),
+                'aufrufe' => (int) $zeile->getAttribute('aufrufe'),
+                'input_tokens' => (int) $zeile->getAttribute('summe_input'),
+                'output_tokens' => (int) $zeile->getAttribute('summe_output'),
             ];
         })->all();
     }

@@ -32,7 +32,7 @@ final class TextGenerationTest extends TestCase
             'listing_id' => $listing->id,
             'feld' => TextFeld::Titel->value,
             'quelle' => TextQuelle::Ki->value,
-            'modell' => 'fake',
+            'modell' => 'vorlage',
             'uebernommen' => false,
         ]);
     }
@@ -76,7 +76,7 @@ final class TextGenerationTest extends TestCase
 
         $response->assertRedirect();
         $response->assertSessionHas('status');
-        $this->assertStringContainsString('Modell: fake', session('status'));
+        $this->assertStringContainsString('Modell: vorlage', session('status'));
 
         $listing->refresh();
         $response = $this->actingAs($user)->get(route('app.listings.step', ['listing' => $listing, 'schritt' => 8]));

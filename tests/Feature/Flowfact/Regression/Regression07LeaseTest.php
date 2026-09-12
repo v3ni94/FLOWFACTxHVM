@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Feature\Flowfact\Regression;
 
+use App\Domain\Listing\ListingSnapshot;
 use App\Enums\MediaTyp;
 use App\Flowfact\Sync\MediaSyncService;
 use App\Flowfact\Sync\SyncLease;
@@ -20,9 +21,19 @@ use Tests\Feature\Flowfact\FlowfactTestCase;
  * Prüfbericht 2026-09-11, Befund 7: release() gibt nur die eigene Lease frei
  * (Token), der Herzschlag verlängert nur die eigene Lease, und der
  * Medienabgleich ruft den Herzschlag nach jedem übertragenen Bild.
+ *
+ * Deterministisch: Die Uhr ist in jedem Test eingefroren (Carbon::setTestNow),
+ * gezählt werden Aufrufe, nie verstrichene Zeit.
  */
 final class Regression07LeaseTest extends FlowfactTestCase
 {
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        Carbon::setTestNow('2026-09-11 10:00:00');
+    }
+
     protected function tearDown(): void
     {
         Carbon::setTestNow();
@@ -40,7 +51,6 @@ final class Regression07LeaseTest extends FlowfactTestCase
         $laufB = $link->fresh();
         $laufC = $link->fresh();
 
-        Carbon::setTestNow('2026-09-11 10:00:00');
         $tokenA = $lease->acquire($laufA);
         self::assertNotNull($tokenA, 'Lauf A startet.');
         self::assertSame($tokenA, $link->fresh()->sperre_token);
@@ -73,7 +83,6 @@ final class Regression07LeaseTest extends FlowfactTestCase
         $link = ListingFlowfactLink::factory()->create(['listing_id' => $listing->id]);
         $lease = new SyncLease(3);
 
-        Carbon::setTestNow('2026-09-11 10:00:00');
         $tokenA = $lease->acquire($link->fresh());
 
         Carbon::setTestNow('2026-09-11 10:01:00');
@@ -89,6 +98,11 @@ final class Regression07LeaseTest extends FlowfactTestCase
         self::assertTrue($link->fresh()->sperre_bis->equalTo(Carbon::parse('2026-09-11 10:07:01')), 'Die Lease von B bleibt unverändert.');
     }
 
+    /**
+     * Der Herzschlag wird je übertragenem Bild genau einmal gerufen. Jeder
+     * Aufruf verlängert die eigene Lease auf die eingefrorene Zeit plus
+     * Laufzeit; der Vergleich erfolgt über Zähler und feste Zeitpunkte.
+     */
     public function test_medienabgleich_ruft_den_herzschlag_nach_jedem_uebertragenen_bild(): void
     {
         $this->hinterlegeToken();
@@ -96,6 +110,10 @@ final class Regression07LeaseTest extends FlowfactTestCase
         $this->settings()->set('flowfact.album_'.self::SCHEMA_MIETE, ['album' => 'estate_album', 'bilder' => 'images']);
 
         $listing = Listing::factory()->miete()->create();
+        $link = ListingFlowfactLink::factory()->create(['listing_id' => $listing->id]);
+        $lease = new SyncLease(3);
+        $token = $lease->acquire($link);
+        self::assertNotNull($token);
 
         for ($i = 0; $i < 3; $i++) {
             $pfad = 'listings/'.$listing->uuid.'/bild-'.$i.'.jpg';
@@ -113,19 +131,32 @@ final class Regression07LeaseTest extends FlowfactTestCase
             ->install();
 
         $herzschlaege = 0;
+        $verlaengerungen = [];
+        $heartbeat = function () use (&$herzschlaege, &$verlaengerungen, $lease, $link, $token): void {
+            $herzschlaege++;
+            // Jeder Herzschlag findet zu einem anderen eingefrorenen Zeitpunkt statt.
+            Carbon::setTestNow(Carbon::parse('2026-09-11 10:00:00')->addMinutes($herzschlaege));
+            $verlaengerungen[] = $lease->extend($link->fresh(), $token);
+        };
+
+        $listing = $listing->fresh(['media']);
         $ergebnis = app(MediaSyncService::class)->sync(
-            $listing->fresh(['media']),
+            $listing,
+            ListingSnapshot::fromListing($listing),
             self::SCHEMA_MIETE,
             'ent-1',
             null,
             null,
             false,
-            function () use (&$herzschlaege): void {
-                $herzschlaege++;
-            },
+            $heartbeat,
         );
 
         self::assertSame(3, $ergebnis->hochgeladen);
-        self::assertSame(3, $herzschlaege, 'Nach jedem übertragenen Bild wird die Lease verlängert.');
+        self::assertSame(3, $herzschlaege, 'Nach jedem übertragenen Bild wird der Herzschlag genau einmal gerufen.');
+        self::assertSame([true, true, true], $verlaengerungen, 'Jeder Herzschlag verlängert die eigene Lease.');
+        self::assertTrue(
+            $link->fresh()->sperre_bis->equalTo(Carbon::parse('2026-09-11 10:06:00')),
+            'Letzter Herzschlag um 10:03 plus Laufzeit von 3 Minuten.',
+        );
     }
 }

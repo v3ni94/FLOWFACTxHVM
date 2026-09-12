@@ -9,6 +9,7 @@ use App\Flowfact\Client\Exceptions\FlowfactException;
 use App\Flowfact\Client\Exceptions\RateLimitException;
 use App\Flowfact\Sync\FlowfactPublishingService;
 use App\Flowfact\Sync\PublishingService;
+use App\Flowfact\Sync\ReleaseGuard;
 use App\Models\Listing;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
@@ -16,11 +17,19 @@ use Illuminate\Support\Facades\Log;
 
 /**
  * Liest den Portalstatus eines Objekts nach (docs/connector.md Abschnitt 5,
- * Punkt 3). Einzige Quelle für den Portalstatus "aktiv".
+ * Punkt 3). Einzige Quelle für den Portalstatus "aktiv" und
+ * "deaktivierung_bestaetigt".
+ *
+ * Trägt optional die release_id, für die das Rücklesen eingereiht wurde
+ * (Masterprompt Abschnitt 19): ist inzwischen eine neuere Freigabe vorhanden
+ * oder das Objekt archiviert, wird der Lauf mit Protokolleintrag übersprungen;
+ * der Scheduler (flow:portal-status) liest ohne Versionsbindung nach.
  */
 final class RefreshPortalStatusJob implements ShouldQueue
 {
     use Queueable;
+
+    public const string AKTION = 'job RefreshPortalStatusJob';
 
     public int $tries = 3;
 
@@ -29,13 +38,20 @@ final class RefreshPortalStatusJob implements ShouldQueue
 
     public function __construct(
         public readonly int $listingId,
+        public readonly ?int $releaseId = null,
     ) {}
 
-    public function handle(PublishingService $service): void
+    public function handle(PublishingService $service, ?ReleaseGuard $guard = null): void
     {
         $listing = Listing::query()->find($this->listingId);
 
         if ($listing === null) {
+            return;
+        }
+
+        $guard ??= app(ReleaseGuard::class);
+
+        if ($guard->pruefeJob($listing, $this->releaseId, self::AKTION) !== null) {
             return;
         }
 

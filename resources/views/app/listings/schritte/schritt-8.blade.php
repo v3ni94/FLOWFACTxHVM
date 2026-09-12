@@ -67,7 +67,7 @@
                     @foreach ($textvorschlaege[$spalte] as $vorschlag)
                         <div class="card card-canvas">
                             <div class="card-title">
-                                {{ $vorschlag->modell === 'fake' ? 'Vorlagenentwurf (ohne KI)' : 'Vorschlag ('.$vorschlag->modell.')' }}
+                                {{ $vorschlag->modell === 'vorlage' ? 'Vorlagenentwurf (ohne KI)' : 'Vorschlag ('.$vorschlag->modell.')' }}
                                 @if ($vorschlag->anweisung)
                                     <span class="badge badge-info">{{ ucfirst($vorschlag->anweisung) }}</span>
                                 @endif

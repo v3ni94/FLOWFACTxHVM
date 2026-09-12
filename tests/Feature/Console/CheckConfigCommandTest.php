@@ -43,6 +43,7 @@ final class CheckConfigCommandTest extends TestCase
     {
         $this->artisan('flow:check-config')
             ->expectsOutputToContain('keine Jobs in der Tabelle, keine gestauten Jobs')
+            ->expectsOutputToContain('FLOWFACT-Konfliktverhalten')
             ->assertExitCode(0);
     }
 

@@ -19,7 +19,7 @@ final class FakeTextReviser implements TextReviser
 
     public function modell(): string
     {
-        return 'fake';
+        return 'vorlage';
     }
 
     public function revise(Listing $listing, string $text, string $anweisung): string

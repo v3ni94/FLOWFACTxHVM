@@ -5,27 +5,38 @@ declare(strict_types=1);
 namespace App\Flowfact\Sync;
 
 use App\Domain\Listing\CompletenessCheck;
-use App\Domain\Listing\ListingContentHasher;
+use App\Domain\Listing\ListingSnapshot;
+use App\Domain\Listing\ReleaseService;
 use App\Domain\Settings\SettingsRepository;
 use App\Enums\ListingStatus;
+use App\Enums\ReleaseAktion;
 use App\Enums\SyncStatus;
+use App\Enums\Vermarktungsart;
 use App\Flowfact\Client\Exceptions\AuthenticationException;
 use App\Flowfact\Client\Exceptions\FlowfactException;
 use App\Flowfact\Client\Exceptions\NotFoundException;
 use App\Flowfact\Client\TokenScrubber;
 use App\Flowfact\Mapping\FlowfactPayloadMapper;
+use App\Flowfact\Mapping\MappedPayload;
 use App\Flowfact\Services\EntityService;
 use App\Flowfact\Services\SearchService;
 use App\Flowfact\Sync\Jobs\TransferListingJob;
 use App\Models\Listing;
 use App\Models\ListingFlowfactLink;
+use App\Models\ListingRelease;
 use App\Models\User;
 use Illuminate\Support\Carbon;
 use Throwable;
 
 /**
  * Ablauf einer Übertragung (docs/connector.md Abschnitt 3), idempotent
- * (Datenvertrag Grundsatz 4, ADR-005).
+ * (Datenvertrag Grundsatz 4, ADR-005), auf Basis der jüngsten Freigabeversion
+ * (Masterprompt Abschnitt 19 und 23, Masterprompt-Abgleich B.6).
+ *
+ * WARUM Freigabeversion: Der Payload entsteht aus payload_json und medien_json
+ * der jüngsten ListingRelease, nie aus dem Live-Stand. Änderungen nach der
+ * Freigabe erreichen FLOWFACT erst mit der nächsten Freigabe. Ohne Freigabe
+ * wird nicht übertragen.
  *
  * WARUM Suche vor Anlegen: Nach einer Zeitüberschreitung eines POST ist
  * unbekannt, ob die Entität existiert. Der nächste Lauf sucht deshalb zuerst
@@ -33,13 +44,22 @@ use Throwable;
  * ausgeschlossen, solange die Suche funktioniert; liefert die Suche einen
  * Fehler statt eines leeren Ergebnisses, wird nicht angelegt.
  *
+ * Konflikterkennung (Masterprompt Abschnitt 23): Müller FLOW ist das führende
+ * System für die zugeordneten Felder, FLOWFACT für alles andere. Vor einem
+ * PATCH wird der Änderungszeitpunkt der FLOWFACT-Entität mit dem nach der
+ * letzten Übertragung gespeicherten verglichen. Weicht er ab, endet der Lauf
+ * je nach Einstellung flowfact.konfliktverhalten mit einem Fehler (abbrechen)
+ * oder überschreibt die zugeordneten Felder mit Warnung (ueberschreiben).
+ *
+ * Löschsemantik mit Absicht (Masterprompt Abschnitt 23): { "values": [] }
+ * wird nur für zugeordnete Felder gesendet, die mit einer früheren Freigabe
+ * tatsächlich übertragen wurden und in der aktuellen Freigabe leer sind.
+ *
  * Nach Prüfbericht 2026-09-11:
  * - Befund 3: Ist eine Entität bekannt, gilt das im Link gespeicherte Schema.
  *   Ein Wechsel der Vermarktungsart nach der Übertragung wird abgelehnt statt
  *   eine zweite Entität im anderen Schema anzulegen. Jede Übertragung setzt
  *   die bestandene Vollständigkeitsprüfung voraus.
- * - Befund 5: Beim PATCH werden geleerte, zugeordnete Felder als
- *   { "values": [] } gesendet (Einstellung flowfact.leere_felder_loeschen).
  * - Befund 7: Lease mit Token, Freigabe nur der eigenen Lease, Herzschlag
  *   nach jedem Bildupload.
  */
@@ -59,6 +79,14 @@ final class ListingSyncService
 
     public const string MELDUNG_UNVOLLSTAENDIG = 'Das Objekt ist nicht vollständig und wird nicht übertragen. Es fehlen: %s.';
 
+    public const string MELDUNG_KEINE_FREIGABE = 'Keine Freigabe vorhanden. Bitte im Schritt Prüfen und veröffentlichen freigeben.';
+
+    public const string MELDUNG_KONFLIKT = 'In FLOWFACT wurde das Objekt seit der letzten Übertragung geändert (%s). Bitte prüfen und erneut freigeben.';
+
+    public const string WARNUNG_KONFLIKT_UEBERSCHRIEBEN = 'In FLOWFACT wurde das Objekt seit der letzten Übertragung geändert (%s). Die zugeordneten Felder wurden gemäß Einstellung überschrieben.';
+
+    public const string WARNUNG_KEIN_ZEITSTEMPEL = 'FLOWFACT hat keinen Änderungszeitpunkt geliefert; die Konflikterkennung ist beim nächsten Lauf nicht möglich.';
+
     /**
      * Einstellung (Standard true): geleerte Felder beim PATCH mit leerer
      * Werteliste senden, damit FLOWFACT den alten Wert löscht. Die genaue
@@ -66,12 +94,21 @@ final class ListingSyncService
      */
     public const string LEERE_FELDER_LOESCHEN = 'flowfact.leere_felder_loeschen';
 
+    /**
+     * Einstellung: abbrechen (Standard) oder ueberschreiben.
+     */
+    public const string KONFLIKTVERHALTEN = 'flowfact.konfliktverhalten';
+
+    public const string KONFLIKT_ABBRECHEN = 'abbrechen';
+
+    public const string KONFLIKT_UEBERSCHREIBEN = 'ueberschreiben';
+
     public function __construct(
         private readonly EntityService $entities,
         private readonly SearchService $search,
         private readonly MediaSyncService $media,
         private readonly FlowfactPayloadMapper $mapper,
-        private readonly ListingContentHasher $hasher,
+        private readonly ReleaseService $releases,
         private readonly SettingsRepository $settings,
         private readonly SyncLease $lease,
         private readonly TokenScrubber $scrubber,
@@ -87,6 +124,12 @@ final class ListingSyncService
             return SyncResult::failed(self::MELDUNG_ENTWURF);
         }
 
+        $release = $this->releases->latest($listing);
+
+        if ($release === null) {
+            return SyncResult::failed(self::MELDUNG_KEINE_FREIGABE);
+        }
+
         $listing->loadMissing(['price', 'energy', 'media']);
         $link = $this->linkFuer($listing);
 
@@ -96,6 +139,14 @@ final class ListingSyncService
 
         if (! $vollstaendigkeit->istVollstaendig()) {
             return $this->fehlgeschlagen($link, sprintf(self::MELDUNG_UNVOLLSTAENDIG, implode(', ', $vollstaendigkeit->fehlend)));
+        }
+
+        // Schritt 5 (vorgezogen, ohne API-Aufruf): Payload aus der Freigabeversion.
+        $snapshot = $release->snapshot();
+        $payload = $this->mapper->mapSnapshot($snapshot);
+
+        if ($payload->blockiert !== null) {
+            return $this->fehlgeschlagen($link, $payload->blockiert);
         }
 
         // Schritt 1: Lease
@@ -114,10 +165,10 @@ final class ListingSyncService
 
             // Schritt 3: Schema aus den Einstellungen, nie geraten. Bei
             // bekannter Entität gilt das gespeicherte Schema des Links.
-            $abgeleitet = $this->schemaFuer($listing);
+            $abgeleitet = $this->schemaFuer($listing, $snapshot);
 
             if ($abgeleitet === null) {
-                return $this->fehlgeschlagen($link, sprintf(self::MELDUNG_SCHEMA_FEHLT, $listing->istMiete() ? 'Miete' : 'Kauf'));
+                return $this->fehlgeschlagen($link, sprintf(self::MELDUNG_SCHEMA_FEHLT, $this->istMiete($listing, $snapshot) ? 'Miete' : 'Kauf'));
             }
 
             $schema = $this->gespeichertesSchema($link) ?? $abgeleitet;
@@ -129,46 +180,80 @@ final class ListingSyncService
             $entities = $this->entities->scoped($listing, $user);
             $search = $this->search->scoped($listing, $user);
 
-            // Schritt 4: Entität finden
-            $entityId = $this->findeEntitaet($listing, $link, $schema, $entities, $search);
+            // Schritt 4: Entität finden (liefert auch den FLOWFACT-Änderungszeitpunkt)
+            $gefunden = $this->findeEntitaet($listing, $link, $schema, $entities, $search);
 
-            if ($entityId === false) {
+            if ($gefunden === false) {
                 return $this->fehlgeschlagen($link, self::MELDUNG_MEHRFACHTREFFER);
             }
 
-            // Schritt 5: Payload und Hash
-            $payload = $this->mapper->map($listing);
-            $hash = $this->hasher->hash($listing);
+            $entityId = $gefunden['id'];
+            $remoteLastModified = $gefunden['lastModified'];
             $warnungen = $payload->warnungen;
 
             // Schritt 6: Anlegen oder Aktualisieren
             $angelegt = false;
+            $inhaltGeaendert = $force || (int) ($link->release_id ?? 0) !== (int) $release->getKey() || $link->uebertragener_inhalt_hash !== $release->inhalt_hash;
 
             if ($entityId === null) {
-                $entityId = $entities->create($schema, $payload->fields);
+                $ergebnis = $entities->createMitMetadaten($schema, $payload->fields);
+                $entityId = $ergebnis['id'];
 
                 // ID sofort speichern, bevor irgendetwas anderes passiert.
                 $link->flowfact_entity_id = $entityId;
                 $link->flowfact_schema = $schema;
+                $link->flowfact_last_modified = $ergebnis['lastModified'];
                 $link->save();
                 $angelegt = true;
-            }
+                $inhaltGeaendert = true;
 
-            $inhaltGeaendert = $angelegt || $force || $link->uebertragener_inhalt_hash !== $hash;
+                if ($ergebnis['lastModified'] === null) {
+                    $warnungen[] = self::WARNUNG_KEIN_ZEITSTEMPEL;
+                }
+            } elseif ($inhaltGeaendert) {
+                // Konflikterkennung vor dem PATCH (Masterprompt Abschnitt 23).
+                $konflikt = $this->konflikt($link, $remoteLastModified);
 
-            if (! $angelegt && $inhaltGeaendert) {
-                $entities->patch($schema, $entityId, $this->leereFelderLoeschen() ? $payload->fieldsMitLoeschungen() : $payload->fields);
+                if ($konflikt !== null) {
+                    if ($this->konfliktverhalten() === self::KONFLIKT_ABBRECHEN) {
+                        return $this->fehlgeschlagen($link, sprintf(self::MELDUNG_KONFLIKT, $konflikt));
+                    }
+
+                    $warnungen[] = sprintf(self::WARNUNG_KONFLIKT_UEBERSCHRIEBEN, $konflikt);
+                }
+
+                $patchPayload = $this->leereFelderLoeschen()
+                    ? $payload->loeschungenBeschraenktAuf($this->vorherGesendeteFelder($listing, $link, $release))
+                    : $payload;
+
+                $antwort = $entities->patch($schema, $entityId, $this->leereFelderLoeschen() ? $patchPayload->fieldsMitLoeschungen() : $patchPayload->fields);
+                $lastModified = EntityService::lastModified($antwort);
+
+                if ($lastModified === null) {
+                    // Leerer oder verkürzter Antwortkörper: Änderungszeitpunkt
+                    // nachlesen, sonst wäre die Konflikterkennung beim nächsten
+                    // Lauf blind.
+                    $lastModified = $this->lastModifiedNachlesen($schema, $entityId, $entities);
+                }
+
+                $link->flowfact_last_modified = $lastModified;
+                $link->save();
+
+                if ($lastModified === null) {
+                    $warnungen[] = self::WARNUNG_KEIN_ZEITSTEMPEL;
+                }
             }
 
             // Schritt 7: Medien
             $medienVollstaendig = true;
+            $vorherige = $this->vorherigeVersion($listing, $link, $release);
 
-            if ($inhaltGeaendert || $this->media->hatOffeneArbeit($listing)) {
+            if ($inhaltGeaendert || $this->media->hatOffeneArbeit($listing, $snapshot)) {
                 $heartbeat = function () use ($link, $token): void {
                     $this->lease->extend($link, $token);
                 };
 
-                $medien = $this->media->sync($listing, $schema, $entityId, $user, $deadline, $inhaltGeaendert, $heartbeat);
+                $medien = $this->media->sync($listing, $snapshot, $schema, $entityId, $user, $deadline, $inhaltGeaendert, $heartbeat, $vorherige?->snapshot());
                 $warnungen = array_merge($warnungen, $medien->warnungen);
                 $medienVollstaendig = $medien->vollstaendig;
             }
@@ -178,10 +263,11 @@ final class ListingSyncService
             $link->letzter_fehler = null;
 
             if ($medienVollstaendig) {
-                $link->uebertragener_inhalt_hash = $hash;
+                $link->uebertragener_inhalt_hash = $release->inhalt_hash;
+                $link->release_id = $release->getKey();
                 $link->sync_status = SyncStatus::Uebertragen;
             } else {
-                // Hash bewusst nicht setzen: der Job soll den Rest übertragen.
+                // Hash und Version bewusst nicht setzen: der Job soll den Rest übertragen.
                 $link->sync_status = SyncStatus::GeaendertSeitUebertragung;
                 $warnungen[] = 'Das Zeitlimit wurde erreicht, die restlichen Bilder werden im Hintergrund übertragen.';
             }
@@ -189,7 +275,15 @@ final class ListingSyncService
             $link->save();
 
             if (! $medienVollstaendig) {
-                TransferListingJob::dispatch($listing->id, $user?->id, false)->afterCommit();
+                // Der Job trägt die Freigabeversion; eine Freigabe zur Veröffentlichung
+                // wird nach vollständiger Übertragung im Job angefordert (Masterprompt 19).
+                TransferListingJob::dispatch(
+                    $listing->id,
+                    $user?->id,
+                    false,
+                    (int) $release->getKey(),
+                    $release->aktion === ReleaseAktion::Veroeffentlichen && $release->portalIds() !== [],
+                )->afterCommit();
             }
 
             $meldung = match (true) {
@@ -198,7 +292,7 @@ final class ListingSyncService
                 default => 'Keine Änderungen seit der letzten Übertragung.',
             };
 
-            return new SyncResult(true, $meldung, $entityId, array_values(array_unique($warnungen)));
+            return new SyncResult(true, $meldung, $entityId, array_values(array_unique($warnungen)), releaseId: (int) $release->getKey());
         } catch (AuthenticationException $exception) {
             // Schritt 9: keine automatische Wiederholung bei Auth-Fehlern
             return $this->fehlgeschlagen($link, AuthenticationException::MELDUNG, $exception);
@@ -211,11 +305,43 @@ final class ListingSyncService
         }
     }
 
-    public function schemaFuer(Listing $listing): ?string
+    /**
+     * Schema aus den Einstellungen; die Vermarktungsart stammt aus der
+     * Freigabeversion, sofern vorhanden, sonst aus dem Live-Stand.
+     */
+    public function schemaFuer(Listing $listing, ?ListingSnapshot $snapshot = null): ?string
     {
-        $schema = $this->settings->get($listing->istMiete() ? self::SCHEMA_MIETE : self::SCHEMA_KAUF);
+        $schema = $this->settings->get($this->istMiete($listing, $snapshot) ? self::SCHEMA_MIETE : self::SCHEMA_KAUF);
 
         return is_string($schema) && trim($schema) !== '' ? trim($schema) : null;
+    }
+
+    private function istMiete(Listing $listing, ?ListingSnapshot $snapshot): bool
+    {
+        $vermarktungsart = $snapshot?->listing['vermarktungsart'] ?? null;
+
+        if (is_string($vermarktungsart) && Vermarktungsart::tryFrom($vermarktungsart) !== null) {
+            return Vermarktungsart::from($vermarktungsart) === Vermarktungsart::Miete;
+        }
+
+        return $listing->istMiete();
+    }
+
+    /**
+     * Payload der jüngsten Freigabe, ohne API-Aufruf (Vorschau, Smoke-Test).
+     */
+    public function payloadFuer(ListingRelease $release): MappedPayload
+    {
+        return $this->mapper->mapSnapshot($release->snapshot());
+    }
+
+    public function konfliktverhalten(): string
+    {
+        $wert = $this->settings->get(self::KONFLIKTVERHALTEN, self::KONFLIKT_ABBRECHEN);
+
+        return is_string($wert) && strtolower(trim($wert)) === self::KONFLIKT_UEBERSCHREIBEN
+            ? self::KONFLIKT_UEBERSCHREIBEN
+            : self::KONFLIKT_ABBRECHEN;
     }
 
     /**
@@ -240,21 +366,109 @@ final class ListingSyncService
     }
 
     /**
-     * Schritt 4: gespeicherte ID prüfen, sonst Suche nach identifier.
+     * Konflikt: FLOWFACT meldet einen anderen Änderungszeitpunkt als den nach
+     * der letzten Übertragung gespeicherten. Ohne gespeicherten oder ohne
+     * gelieferten Zeitpunkt ist kein Vergleich möglich (kein Konflikt).
      *
-     * @return string|null|false ID, null (nicht vorhanden) oder false (Mehrfachtreffer)
+     * @return string|null lesbarer Zeitpunkt der fremden Änderung
      */
-    private function findeEntitaet(Listing $listing, ListingFlowfactLink $link, string $schema, EntityService $entities, SearchService $search): string|null|false
+    private function konflikt(ListingFlowfactLink $link, ?string $remoteLastModified): ?string
+    {
+        $gespeichert = $link->flowfact_last_modified;
+
+        if ($gespeichert === null || $gespeichert === '' || $remoteLastModified === null || $remoteLastModified === '') {
+            return null;
+        }
+
+        if ((string) $gespeichert === (string) $remoteLastModified) {
+            return null;
+        }
+
+        return self::zeitpunktLesbar($remoteLastModified);
+    }
+
+    /**
+     * Unix-Millisekunden (FLOWFACT) oder ISO-Text als TT.MM.JJJJ HH:MM Uhr.
+     */
+    public static function zeitpunktLesbar(string $wert): string
+    {
+        if (preg_match('/^\d{10,16}$/', $wert) === 1) {
+            $sekunden = strlen($wert) > 11 ? intdiv((int) $wert, 1000) : (int) $wert;
+
+            return Carbon::createFromTimestamp($sekunden, config('app.timezone', 'Europe/Berlin'))->format('d.m.Y H:i').' Uhr';
+        }
+
+        try {
+            return Carbon::parse($wert)->setTimezone(config('app.timezone', 'Europe/Berlin'))->format('d.m.Y H:i').' Uhr';
+        } catch (Throwable) {
+            return $wert;
+        }
+    }
+
+    private function lastModifiedNachlesen(string $schema, string $entityId, EntityService $entities): ?string
+    {
+        try {
+            return EntityService::lastModified($entities->get($schema, $entityId));
+        } catch (FlowfactException) {
+            return null;
+        }
+    }
+
+    /**
+     * Zuletzt übertragene Version (link.release_id), ersatzweise die
+     * Vorgängerversion der aktuellen Freigabe.
+     */
+    private function vorherigeVersion(Listing $listing, ListingFlowfactLink $link, ListingRelease $aktuell): ?ListingRelease
+    {
+        if ($link->release_id !== null && (int) $link->release_id !== (int) $aktuell->getKey()) {
+            $release = ListingRelease::query()->whereKey($link->release_id)->first();
+
+            if ($release !== null) {
+                return $release;
+            }
+        }
+
+        return $listing->releases()
+            ->where('version', '<', $aktuell->version)
+            ->orderByDesc('version')
+            ->first();
+    }
+
+    /**
+     * FLOWFACT-Feldnamen, die mit der zuletzt übertragenen Version gesendet
+     * wurden. Nur diese dürfen geleert werden (Masterprompt Abschnitt 23).
+     *
+     * @return list<string>
+     */
+    private function vorherGesendeteFelder(Listing $listing, ListingFlowfactLink $link, ListingRelease $aktuell): array
+    {
+        $vorherige = $this->vorherigeVersion($listing, $link, $aktuell);
+
+        if ($vorherige === null) {
+            return [];
+        }
+
+        return $this->mapper->mapSnapshot($vorherige->snapshot())->gesendeteFelder();
+    }
+
+    /**
+     * Schritt 4: gespeicherte ID prüfen, sonst Suche nach identifier. Liefert
+     * die Entitäts-ID mit dem Änderungszeitpunkt aus _metadata.
+     *
+     * @return array{id: string|null, lastModified: string|null}|false ID (null: nicht vorhanden) oder false (Mehrfachtreffer)
+     */
+    private function findeEntitaet(Listing $listing, ListingFlowfactLink $link, string $schema, EntityService $entities, SearchService $search): array|false
     {
         // 4a: gespeicherte ID
         if ($link->flowfact_entity_id !== null) {
             try {
-                $entities->get($schema, $link->flowfact_entity_id);
+                $entity = $entities->get($schema, $link->flowfact_entity_id);
 
-                return $link->flowfact_entity_id;
+                return ['id' => $link->flowfact_entity_id, 'lastModified' => EntityService::lastModified($entity)];
             } catch (NotFoundException) {
                 // ID verwerfen und über die Suche fortsetzen
                 $link->flowfact_entity_id = null;
+                $link->flowfact_last_modified = null;
                 $link->save();
             }
         }
@@ -267,25 +481,24 @@ final class ListingSyncService
             $identifier = $eintrag['identifier']['values'][0] ?? null;
 
             if (is_scalar($identifier) && (string) $identifier === $listing->objektnummer && isset($eintrag['id']) && is_scalar($eintrag['id'])) {
-                $treffer[] = (string) $eintrag['id'];
+                $treffer[(string) $eintrag['id']] = EntityService::lastModified($eintrag);
             }
         }
-
-        $treffer = array_values(array_unique($treffer));
 
         if (count($treffer) > 1 || $ergebnis['totalCount'] > 2) {
             return false;
         }
 
         if (count($treffer) === 1) {
-            $link->flowfact_entity_id = $treffer[0];
+            $id = (string) array_key_first($treffer);
+            $link->flowfact_entity_id = $id;
             $link->flowfact_schema = $schema;
             $link->save();
 
-            return $treffer[0];
+            return ['id' => $id, 'lastModified' => $treffer[$id]];
         }
 
-        return null;
+        return ['id' => null, 'lastModified' => null];
     }
 
     private function linkFuer(Listing $listing): ListingFlowfactLink

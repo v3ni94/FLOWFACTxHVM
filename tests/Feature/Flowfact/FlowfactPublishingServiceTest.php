@@ -11,6 +11,7 @@ use App\Enums\SyncStatus;
 use App\Flowfact\Client\Exceptions\AuthenticationException;
 use App\Flowfact\Sync\FlowfactPublishingService;
 use App\Flowfact\Sync\Jobs\TransferListingJob;
+use App\Flowfact\Sync\ListingSyncService;
 use App\Flowfact\Sync\PublishingService;
 use App\Models\Listing;
 use App\Models\ListingFlowfactLink;
@@ -59,6 +60,9 @@ final class FlowfactPublishingServiceTest extends FlowfactTestCase
         $listing = $this->bereitesListing(['status' => $status]);
         $listing->media()->update(['flowfact_multimedia_id' => '101', 'titel' => null, 'flowfact_titel' => null]);
         $listing = $listing->fresh(['price', 'energy', 'media']);
+        // Freigabeversion mit beiden Portalen (B.6), wie sie der Schritt
+        // Prüfen und veröffentlichen vor dem Aufruf anlegt.
+        $release = $this->freigeben($listing, ['portal-is24', 'portal-openimmo']);
 
         ListingFlowfactLink::factory()->create([
             'listing_id' => $listing->id,
@@ -66,6 +70,7 @@ final class FlowfactPublishingServiceTest extends FlowfactTestCase
             'flowfact_schema' => self::SCHEMA_MIETE,
             'sync_status' => SyncStatus::Uebertragen,
             'uebertragener_inhalt_hash' => app(ListingContentHasher::class)->hash($listing),
+            'release_id' => $release->id,
             'letzte_uebertragung_at' => now(),
         ]);
 
@@ -206,6 +211,7 @@ final class FlowfactPublishingServiceTest extends FlowfactTestCase
     public function test_nicht_authentifiziertes_oder_unbekanntes_portal_wird_abgewiesen(): void
     {
         $listing = $this->uebertragenesListing();
+        $this->freigeben($listing, ['portal-inaktiv', 'portal-unbekannt']);
         $fake = $this->fakePortale();
 
         $ergebnis = $this->service()->publish($listing, ['portal-inaktiv', 'portal-unbekannt']);
@@ -297,17 +303,21 @@ final class FlowfactPublishingServiceTest extends FlowfactTestCase
         self::assertSame('OFFLINE', $request['entries'][0]['targetStatus']);
 
         $publication = ListingPortalPublication::query()->first();
-        self::assertSame(PortalStatus::Aktiv, $publication->status, 'Bis zum Rücklesen bleibt der alte Status.');
-        self::assertSame(FlowfactPublishingService::HINWEIS_RUECKZUG, $publication->letzter_fehler);
+        self::assertSame(PortalStatus::DeaktivierungAngefordert, $publication->status, 'Bis zum Rücklesen ist die Deaktivierung nur angefordert (Masterprompt 24).');
+        self::assertNull($publication->letzter_fehler);
         self::assertNotNull($publication->zurueckgezogen_at);
         self::assertSame(ListingStatus::Veroeffentlicht, $listing->fresh()->status);
 
-        // Rücklesen ohne Eintrag: zurückgezogen, alle Portale weg, Objekt zurückgezogen.
+        // Rücklesen mit onlineSince: Deaktivierung bleibt angefordert.
+        $this->service()->refreshStatus($listing);
+        self::assertSame(PortalStatus::DeaktivierungAngefordert, $publication->fresh()->status);
+
+        // Rücklesen ohne Eintrag: Deaktivierung bestätigt, Objekt zurückgezogen.
         $online = [];
         $this->service()->refreshStatus($listing);
 
         $publication->refresh();
-        self::assertSame(PortalStatus::Zurueckgezogen, $publication->status);
+        self::assertSame(PortalStatus::DeaktivierungBestaetigt, $publication->status);
         self::assertNull($publication->letzter_fehler);
         self::assertSame(ListingStatus::Zurueckgezogen, $listing->fresh()->status);
     }
@@ -330,7 +340,7 @@ final class FlowfactPublishingServiceTest extends FlowfactTestCase
 
         self::assertTrue($ergebnis->ok, $ergebnis->meldung);
         self::assertSame(1, $fake->count('GET', self::ESTATE_PORTALS));
-        self::assertSame(PortalStatus::Zurueckgezogen, ListingPortalPublication::query()->first()->status);
+        self::assertSame(PortalStatus::DeaktivierungBestaetigt, ListingPortalPublication::query()->first()->status);
         self::assertSame(ListingStatus::Zurueckgezogen, $listing->fresh()->status);
     }
 
@@ -373,6 +383,7 @@ final class FlowfactPublishingServiceTest extends FlowfactTestCase
         Queue::fake();
         $listing = $this->bereitesListing();
         Storage::disk('media')->put($listing->media()->first()->pfad, $this->beispielbild());
+        $release = $this->freigeben($listing, ['portal-is24']);
 
         $fake = $this->fake()
             ->on('POST', '#^/search-service/schemas/[^/]+$#', self::searchResponse([]))
@@ -393,23 +404,80 @@ final class FlowfactPublishingServiceTest extends FlowfactTestCase
         self::assertSame(SyncStatus::GeaendertSeitUebertragung, $listing->flowfactLink()->first()->sync_status);
         self::assertSame(ListingStatus::Bereit, $listing->fresh()->status);
         self::assertSame(0, ListingPortalPublication::query()->count());
-        Queue::assertPushed(TransferListingJob::class);
+        Queue::assertPushed(TransferListingJob::class, fn (TransferListingJob $job): bool => $job->releaseId === $release->id && $job->veroeffentlichen);
     }
 
-    public function test_publish_result_traegt_auth_ausnahme(): void
+    /**
+     * Fall B (Masterprompt Abschnitt 20): 401 oder 403 auf POST /publish nach
+     * erfolgreicher Übertragung ist weder Fehler noch Erfolg.
+     */
+    public function test_http_403_auf_publish_ist_fall_b_manuelle_freigabe(): void
     {
         $listing = $this->uebertragenesListing();
         $this->fake()
             ->on('GET', self::PORTALS, self::portalsResponse())
-            ->on('POST', self::PUBLISH, ['message' => 'nope'], 403)
+            ->on('POST', self::PUBLISH, ['message' => 'nope '.self::TOKEN], 403)
+            ->install();
+
+        $ergebnis = $this->service()->publish($listing, ['portal-is24']);
+
+        self::assertTrue($ergebnis->ok, $ergebnis->meldung);
+        self::assertNull($ergebnis->ausnahme);
+        self::assertContains(FlowfactPublishingService::MELDUNG_MANUELLE_FREIGABE, $ergebnis->warnungen);
+        self::assertTrue($ergebnis->nurManuelleFreigabe());
+        self::assertSame(['ImmoScout24'], $ergebnis->manuelleFreigabe);
+
+        $publication = ListingPortalPublication::query()->first();
+        self::assertSame(PortalStatus::ManuelleFreigabeErforderlich, $publication->status);
+        self::assertSame(FlowfactPublishingService::MELDUNG_MANUELLE_FREIGABE, $publication->letzter_fehler);
+        self::assertSame(ListingStatus::Bereit, $listing->fresh()->status, 'Fall B setzt das Objekt nicht auf veröffentlicht.');
+        self::assertStringNotContainsString(self::TOKEN, $ergebnis->meldung);
+    }
+
+    /**
+     * Ein echter Auth-Fehler vor der Veröffentlichung (Portalliste) bleibt ein Fehler.
+     */
+    public function test_publish_result_traegt_auth_ausnahme_der_portalliste(): void
+    {
+        $listing = $this->uebertragenesListing();
+        $this->fake()
+            ->on('GET', self::PORTALS, ['message' => 'nope'], 401)
             ->install();
 
         $ergebnis = $this->service()->publish($listing, ['portal-is24']);
 
         self::assertFalse($ergebnis->ok);
         self::assertInstanceOf(AuthenticationException::class, $ergebnis->ausnahme);
-        self::assertSame(PortalStatus::Fehler, ListingPortalPublication::query()->first()->status);
+        self::assertSame(0, ListingPortalPublication::query()->count());
         self::assertStringNotContainsString(self::TOKEN, $ergebnis->meldung);
+    }
+
+    /**
+     * Masterprompt-Abgleich B.6: Portale außerhalb der Freigabe werden abgewiesen.
+     */
+    public function test_portale_ausserhalb_der_freigabe_werden_abgewiesen(): void
+    {
+        $listing = $this->uebertragenesListing();
+        $this->freigeben($listing, ['portal-is24']);
+        $fake = $this->fakePortale();
+
+        $ergebnis = $this->service()->publish($listing, ['portal-is24', 'portal-openimmo']);
+
+        self::assertFalse($ergebnis->ok);
+        self::assertStringContainsString('portal-openimmo', $ergebnis->meldung);
+        self::assertSame(0, $fake->count('POST', self::PUBLISH));
+    }
+
+    public function test_ohne_freigabe_wird_nicht_veroeffentlicht(): void
+    {
+        Http::fake();
+        $listing = $this->bereitesListing();
+
+        $ergebnis = $this->service()->publish($listing, ['portal-is24']);
+
+        self::assertFalse($ergebnis->ok);
+        self::assertSame(ListingSyncService::MELDUNG_KEINE_FREIGABE, $ergebnis->meldung);
+        Http::assertNothingSent();
     }
 
     public function test_interface_ist_bei_token_auf_die_echte_umsetzung_gebunden(): void

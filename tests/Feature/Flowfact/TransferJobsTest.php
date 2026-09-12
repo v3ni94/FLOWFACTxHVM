@@ -34,8 +34,10 @@ final class TransferJobsTest extends FlowfactTestCase
     {
         $listing = $this->bereitesListing();
         $listing->media()->update(['flowfact_multimedia_id' => '101', 'titel' => null]);
+        $listing = $listing->fresh(['price', 'energy', 'media']);
+        $this->freigeben($listing, []);
 
-        return $listing->fresh(['price', 'energy', 'media']);
+        return $listing;
     }
 
     private function queueJob(): Job

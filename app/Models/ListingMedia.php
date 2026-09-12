@@ -21,6 +21,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * @property bool $im_inserat
  * @property bool $freigegeben
  * @property int $rotation
+ * @property bool $enthaelt_standortdaten
  * @property string $pruefsumme_sha256
  */
 class ListingMedia extends Model
@@ -44,6 +45,7 @@ class ListingMedia extends Model
             'im_inserat' => 'boolean',
             'freigegeben' => 'boolean',
             'rotation' => 'integer',
+            'enthaelt_standortdaten' => 'boolean',
         ];
     }
 

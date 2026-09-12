@@ -21,7 +21,8 @@ use Tests\Feature\Flowfact\Support\FakeFlowfact;
 /**
  * Prüfbericht 2026-09-11, Befund 4: Nach dem Erstupload werden Ausblenden
  * (im_inserat = false), Reihenfolge, Titelbild und Bildtitel an FLOWFACT
- * nachgezogen.
+ * nachgezogen. Seit Welle 3 gilt dafür die jüngste Freigabeversion (B.6):
+ * jede Änderung wird vor der Übertragung erneut freigegeben.
  */
 final class Regression04MedienAenderungenTest extends FlowfactTestCase
 {
@@ -55,6 +56,7 @@ final class Regression04MedienAenderungenTest extends FlowfactTestCase
             'flowfact_multimedia_id' => '102',
         ]);
         $listing = $listing->fresh(['price', 'energy', 'media']);
+        $release = $this->freigeben($listing, []);
 
         ListingFlowfactLink::factory()->create([
             'listing_id' => $listing->id,
@@ -62,6 +64,7 @@ final class Regression04MedienAenderungenTest extends FlowfactTestCase
             'flowfact_schema' => self::SCHEMA_MIETE,
             'sync_status' => SyncStatus::Uebertragen,
             'uebertragener_inhalt_hash' => app(ListingContentHasher::class)->hash($listing),
+            'release_id' => $release->id,
         ]);
 
         return $listing;
@@ -87,6 +90,7 @@ final class Regression04MedienAenderungenTest extends FlowfactTestCase
         // Benutzer nimmt das zweite Bild aus dem Inserat (Schritt 5, "Im Inserat" abgehakt).
         $listing->media()->where('flowfact_multimedia_id', '102')->update(['im_inserat' => false]);
         $listing = $listing->fresh(['price', 'energy', 'media']);
+        $this->freigeben($listing, []);
         $fake = $this->fakeAktualisierung();
 
         $ergebnis = app(ListingSyncService::class)->sync($listing);
@@ -111,6 +115,7 @@ final class Regression04MedienAenderungenTest extends FlowfactTestCase
         $listing->media()->where('flowfact_multimedia_id', '101')->update(['sortierung' => 1]);
         $listing->media()->where('flowfact_multimedia_id', '102')->update(['sortierung' => 0, 'titel' => 'Neuer Titel']);
         $listing = $listing->fresh(['price', 'energy', 'media']);
+        $this->freigeben($listing, []);
         $fake = $this->fakeAktualisierung();
 
         $ergebnis = app(ListingSyncService::class)->sync($listing);
@@ -144,6 +149,7 @@ final class Regression04MedienAenderungenTest extends FlowfactTestCase
         ]);
         $listing->update(['titel' => 'Geänderter Titel']);
         $listing = $listing->fresh(['price', 'energy', 'media']);
+        $this->freigeben($listing, []);
         $fake = $this->fakeAktualisierung();
 
         $ergebnis = app(ListingSyncService::class)->sync($listing);

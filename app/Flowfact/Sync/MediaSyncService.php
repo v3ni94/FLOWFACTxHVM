@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Flowfact\Sync;
 
+use App\Domain\Listing\ListingSnapshot;
 use App\Domain\Settings\SettingsRepository;
 use App\Enums\MediaTyp;
 use App\Flowfact\Client\Exceptions\AuthenticationException;
@@ -16,36 +17,40 @@ use App\Models\Listing;
 use App\Models\ListingMedia;
 use App\Models\User;
 use Closure;
-use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Support\Carbon;
-use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Storage;
 use Throwable;
 
 /**
- * Bildabgleich je Objekt (docs/connector.md Abschnitt 3 Schritt 7,
- * flowfact-api.md Abschnitt 8).
+ * Medienabgleich je Objekt auf Basis der Freigabeversion (docs/connector.md
+ * Abschnitt 3 Schritt 7, flowfact-api.md Abschnitt 8, Masterprompt Abschnitt 14
+ * und 19).
  *
- * Hochgeladen werden nur Medien mit im_inserat = true vom Typ Bild oder
- * Grundriss. Dokumente werden in dieser Version nicht übertragen
- * (Datenvertrag 2.6). Jedes Medium erhält genau einmal ein FLOWFACT-Item;
- * die gespeicherte flowfact_multimedia_id verhindert Doppeluploads.
+ * Maßgeblich ist medien_json der Freigabeversion (ListingSnapshot::medien):
+ * Dort stehen ausschließlich Medien, die im Inserat und freigegeben sind, mit
+ * Reihenfolge, Titel und Drehung zum Zeitpunkt der Freigabe. Die Datei selbst
+ * (Pfad, MIME, Prüfsumme) und die FLOWFACT-Item-ID kommen aus listing_media.
  *
- * Nach Prüfbericht 2026-09-11:
- * - Befund 4: ausgeblendete Medien (im_inserat = false) und Dokumente mit
- *   FLOWFACT-ID werden gelöscht, geänderte Titel per PATCH nachgezogen, die
- *   Reihenfolge wird bei jeder Inhaltsänderung neu gesetzt.
- * - Befund 6: deterministischer Dateiname je Medium; vor dem Upload werden
- *   die vorhandenen Items gelesen und ein Treffer über den Dateinamen
- *   übernommen statt erneut hochgeladen.
- * - Befund 7: nach jedem Upload wird die Lease über den Herzschlag verlängert.
+ * - Bilder und Grundrisse werden mit eingebrannter Drehung in Portalgröße
+ *   hochgeladen (ImageResizer, ohne EXIF), Dokumente und Energieausweise
+ *   unverändert in die Dokumentkategorie des Albums; fehlt sie, entsteht eine
+ *   Warnung und das Dokument bleibt lokal.
+ * - Medien mit FLOWFACT-Item, die nicht mehr in der Freigabe stehen (aus dem
+ *   Inserat genommen, Freigabe entzogen, gelöscht), werden in FLOWFACT
+ *   gelöscht (Befund 4). Eine geänderte Drehung gegenüber der zuletzt
+ *   übertragenen Version löscht das Item ebenfalls und lädt es neu hoch.
+ * - Deterministischer Dateiname je Medium; vorhandene Items werden über den
+ *   Dateinamen übernommen statt erneut hochgeladen (Befund 6).
+ * - Nach jedem Upload wird die Lease über den Herzschlag verlängert (Befund 7).
  */
 final class MediaSyncService
 {
     public const string DISK = 'media';
 
-    /** @var array<string, array<string, mixed>>|null Items der Entität je ID, einmal je Lauf gelesen */
-    private ?array $items = null;
+    public const string WARNUNG_KEIN_DOKUMENTALBUM = 'Dokument "%s" wurde nicht übertragen: das FLOWFACT-Album hat keine Kategorie für Dokumente.';
+
+    /** @var array<string, array<string, array<string, mixed>>> Items der Entität je Kategorie und ID, einmal je Lauf gelesen */
+    private array $items = [];
 
     public function __construct(
         private readonly MultimediaService $multimedia,
@@ -54,35 +59,37 @@ final class MediaSyncService
     ) {}
 
     /**
+     * @param  ListingSnapshot  $snapshot  Momentaufnahme der Freigabeversion, deren Medien übertragen werden
      * @param  bool  $inhaltGeaendert  true, wenn sich der Inhalts-Hash geändert hat; dann wird die Reihenfolge immer neu gesetzt
      * @param  Closure|null  $heartbeat  wird nach jedem übertragenen Medium aufgerufen (Lease verlängern)
+     * @param  ListingSnapshot|null  $vorherige  zuletzt übertragene Version (Erkennung geänderter Drehung)
      */
-    public function sync(Listing $listing, string $schema, string $entityId, ?User $user = null, ?Carbon $deadline = null, bool $inhaltGeaendert = false, ?Closure $heartbeat = null): MediaSyncResult
+    public function sync(Listing $listing, ListingSnapshot $snapshot, string $schema, string $entityId, ?User $user = null, ?Carbon $deadline = null, bool $inhaltGeaendert = false, ?Closure $heartbeat = null, ?ListingSnapshot $vorherige = null): MediaSyncResult
     {
         $multimedia = $this->multimedia->scoped($listing, $user);
         $warnungen = [];
-        $this->items = null;
+        $this->items = [];
+
+        // Immer frisch lesen: FLOWFACT-IDs und Titel können sich seit dem
+        // Laden der Relation geändert haben.
+        $listing->load('media');
 
         $geloescht = $this->verarbeiteLoeschungen($listing, $multimedia, $warnungen);
-        $geloescht += $this->verarbeiteAusgeblendete($listing, $multimedia, $warnungen);
+        $geloescht += $this->verarbeiteEntfernte($listing, $snapshot, $vorherige, $multimedia, $warnungen);
 
-        $medien = $listing->media()
-            ->whereIn('typ', [MediaTyp::Bild->value, MediaTyp::Grundriss->value])
-            ->where('im_inserat', true)
-            ->orderByRaw("CASE WHEN typ = 'bild' THEN 0 ELSE 1 END")
-            ->orderBy('sortierung')
-            ->get();
+        $eintraege = $this->eintraege($listing, $snapshot, $warnungen);
+        $bilder = array_values(array_filter($eintraege, fn (array $e): bool => $e['istBild']));
 
-        if ($medien->isEmpty()) {
+        if ($eintraege === []) {
             return new MediaSyncResult($warnungen, true, 0, $geloescht);
         }
 
-        $offen = $medien->filter(fn (ListingMedia $medium): bool => $medium->flowfact_multimedia_id === null);
-        $titelGeaendert = $medien->contains(fn (ListingMedia $medium): bool => $medium->flowfact_multimedia_id !== null && $this->titelWeichtAb($medium));
+        $offen = array_values(array_filter($eintraege, fn (array $e): bool => $e['medium']->flowfact_multimedia_id === null));
+        $titelGeaendert = array_filter($eintraege, fn (array $e): bool => $e['medium']->flowfact_multimedia_id !== null && $this->titelWeichtAb($e));
 
         // Ohne offene Uploads, Löschungen, Titel- oder Inhaltsänderungen gibt es
         // nichts abzugleichen; das spart die Album- und Zuordnungsaufrufe.
-        if ($offen->isEmpty() && $geloescht === 0 && ! $titelGeaendert && ! $inhaltGeaendert) {
+        if ($offen === [] && $geloescht === 0 && $titelGeaendert === [] && ! $inhaltGeaendert) {
             return new MediaSyncResult($warnungen, true, 0, $geloescht);
         }
 
@@ -90,19 +97,25 @@ final class MediaSyncService
         $vollstaendig = true;
         $album = null;
 
-        if ($offen->isNotEmpty()) {
+        if ($offen !== []) {
             $album = $this->album($schema, $multimedia);
 
             if ($album === null) {
                 $warnungen[] = sprintf('Kein Album mit Bildkategorie im Schema "%s" gefunden, Bilder wurden nicht übertragen.', $schema);
             } else {
-                foreach ($offen as $medium) {
+                foreach ($offen as $eintrag) {
+                    if (! $eintrag['istBild'] && $album['dokumente'] === null) {
+                        $warnungen[] = sprintf(self::WARNUNG_KEIN_DOKUMENTALBUM, $eintrag['medium']->dateiname_original);
+
+                        continue;
+                    }
+
                     if ($deadline !== null && Carbon::now()->greaterThanOrEqualTo($deadline)) {
                         $vollstaendig = false;
                         break;
                     }
 
-                    if ($this->uebernimmVorhandenesItem($listing, $medium, $entityId, $multimedia) || $this->upload($listing, $medium, $schema, $entityId, $album, $multimedia, $warnungen)) {
+                    if ($this->uebernimmVorhandenesItem($listing, $eintrag, $entityId, $multimedia) || $this->upload($listing, $eintrag, $schema, $entityId, $album, $multimedia, $warnungen)) {
                         $hochgeladen++;
 
                         if ($heartbeat !== null) {
@@ -113,17 +126,17 @@ final class MediaSyncService
             }
         }
 
-        $this->gleicheTitelAb($medien, $multimedia, $warnungen);
+        $this->gleicheTitelAb($eintraege, $multimedia, $warnungen);
 
-        $hatUebertragene = $medien->contains(fn (ListingMedia $medium): bool => $medium->flowfact_multimedia_id !== null);
+        $hatUebertrageneBilder = array_filter($bilder, fn (array $e): bool => $e['medium']->flowfact_multimedia_id !== null) !== [];
 
-        if ($hatUebertragene && ($hochgeladen > 0 || $geloescht > 0 || $inhaltGeaendert)) {
+        if ($hatUebertrageneBilder && ($hochgeladen > 0 || $geloescht > 0 || $inhaltGeaendert)) {
             $album ??= $this->album($schema, $multimedia);
 
             if ($album === null) {
                 $warnungen[] = sprintf('Kein Album mit Bildkategorie im Schema "%s" gefunden, die Bildreihenfolge wurde nicht gesetzt.', $schema);
             } else {
-                $this->setzeReihenfolge($medien, $schema, $entityId, $album, $multimedia, $warnungen);
+                $this->setzeReihenfolge($bilder, $schema, $entityId, $album, $multimedia, $warnungen);
             }
         }
 
@@ -131,41 +144,116 @@ final class MediaSyncService
     }
 
     /**
-     * Offene Arbeit: fehlende Uploads, vorgemerkte Löschungen, ausgeblendete
-     * Medien mit FLOWFACT-Item oder abweichende Titel.
+     * Offene Arbeit gegenüber der Freigabeversion: fehlende Uploads, Medien
+     * mit FLOWFACT-Item außerhalb der Freigabe, abweichende Titel oder
+     * vorgemerkte Löschungen.
      */
-    public function hatOffeneArbeit(Listing $listing): bool
+    public function hatOffeneArbeit(Listing $listing, ListingSnapshot $snapshot): bool
     {
-        $offeneUploads = $listing->media()
-            ->whereIn('typ', [MediaTyp::Bild->value, MediaTyp::Grundriss->value])
-            ->where('im_inserat', true)
-            ->whereNull('flowfact_multimedia_id')
-            ->exists();
+        $listing->load('media');
+        $freigegebeneIds = $this->freigegebeneIds($snapshot);
 
-        if ($offeneUploads) {
-            return true;
+        foreach ($listing->media as $medium) {
+            $inFreigabe = in_array((int) $medium->getKey(), $freigegebeneIds, true);
+
+            if ($inFreigabe && $medium->flowfact_multimedia_id === null) {
+                return true;
+            }
+
+            if (! $inFreigabe && $medium->flowfact_multimedia_id !== null) {
+                return true;
+            }
         }
 
-        if ($this->ausgeblendeteMitItem($listing)->exists()) {
-            return true;
+        foreach ($this->eintraege($listing, $snapshot) as $eintrag) {
+            if ($eintrag['medium']->flowfact_multimedia_id !== null && $this->titelWeichtAb($eintrag)) {
+                return true;
+            }
         }
 
-        $titelAbweichend = $listing->media()
-            ->whereNotNull('flowfact_multimedia_id')
-            ->where('im_inserat', true)
-            ->whereRaw("COALESCE(titel, '') <> COALESCE(flowfact_titel, '')")
-            ->exists();
-
-        return $titelAbweichend || ListingMediaDeletion::query()->where('listing_id', $listing->id)->exists();
+        return ListingMediaDeletion::query()->where('listing_id', $listing->id)->exists();
     }
 
     /**
      * Deterministischer Dateiname in FLOWFACT (Befund 6):
-     * "<listing uuid>-<media id>-<erste 12 Hex der SHA-256>.<ext>".
+     * "<listing uuid>-<media id>-<erste 12 Hex der SHA-256>[-r<Drehung>].<ext>".
+     * Die Drehung ist Teil des Namens, damit ein gedrehtes Bild nicht mit dem
+     * ungedrehten Item verwechselt wird.
      */
-    public function dateiname(Listing $listing, ListingMedia $medium, string $erweiterung): string
+    public function dateiname(Listing $listing, ListingMedia $medium, string $erweiterung, int $rotation = 0): string
     {
-        return $this->dateinameBasis($listing, $medium).'.'.$erweiterung;
+        return $this->dateinameBasis($listing, $medium, $rotation).'.'.$erweiterung;
+    }
+
+    /**
+     * Medien der Freigabeversion mit ihrer lokalen Datei, in der Reihenfolge
+     * der Freigabe (Bilder zuerst).
+     *
+     * @param  list<string>  $warnungen
+     * @return list<array{medium: ListingMedia, titel: string|null, rotation: int, typ: string, istBild: bool, sortierung: int}>
+     */
+    private function eintraege(Listing $listing, ListingSnapshot $snapshot, array &$warnungen = []): array
+    {
+        $rows = $listing->media->keyBy(fn (ListingMedia $m): int => (int) $m->getKey());
+        $eintraege = [];
+
+        foreach ($snapshot->medien as $daten) {
+            $id = isset($daten['id']) && is_numeric($daten['id']) ? (int) $daten['id'] : null;
+
+            if ($id === null) {
+                continue;
+            }
+
+            if (($daten['freigegeben'] ?? true) === false) {
+                continue;
+            }
+
+            /** @var ListingMedia|null $medium */
+            $medium = $rows->get($id);
+
+            if ($medium === null) {
+                $warnungen[] = sprintf('Medium %d aus der Freigabe existiert lokal nicht mehr und wurde übersprungen.', $id);
+
+                continue;
+            }
+
+            $typ = (string) ($daten['typ'] ?? $medium->typ->value);
+            $istBild = in_array($typ, [MediaTyp::Bild->value, MediaTyp::Grundriss->value], true);
+
+            $eintraege[] = [
+                'medium' => $medium,
+                'titel' => $this->normalisierterTitel(isset($daten['titel']) && is_string($daten['titel']) ? $daten['titel'] : null),
+                'rotation' => (int) ($daten['rotation'] ?? 0),
+                'typ' => $typ,
+                'istBild' => $istBild,
+                'sortierung' => (int) ($daten['sortierung'] ?? 0),
+            ];
+        }
+
+        usort($eintraege, function (array $a, array $b): int {
+            $rangA = $a['typ'] === MediaTyp::Bild->value ? 0 : ($a['istBild'] ? 1 : 2);
+            $rangB = $b['typ'] === MediaTyp::Bild->value ? 0 : ($b['istBild'] ? 1 : 2);
+
+            return [$rangA, $a['sortierung'], (int) $a['medium']->getKey()] <=> [$rangB, $b['sortierung'], (int) $b['medium']->getKey()];
+        });
+
+        return $eintraege;
+    }
+
+    /**
+     * @return list<int>
+     */
+    private function freigegebeneIds(ListingSnapshot $snapshot): array
+    {
+        $ids = [];
+
+        foreach ($snapshot->medien as $daten) {
+            if (isset($daten['id']) && is_numeric($daten['id']) && ($daten['freigegeben'] ?? true) !== false) {
+                $ids[] = (int) $daten['id'];
+            }
+        }
+
+        return $ids;
     }
 
     /**
@@ -194,18 +282,33 @@ final class MediaSyncService
     }
 
     /**
-     * Befund 4: Medien, die aus dem Inserat genommen wurden (oder Dokumente),
-     * aber noch ein FLOWFACT-Item tragen, werden dort gelöscht und die lokale
-     * ID geleert. Wird das Medium später wieder eingeblendet, wird es neu
-     * hochgeladen.
+     * Medien mit FLOWFACT-Item, die nicht mehr in der Freigabe stehen (aus dem
+     * Inserat genommen, Freigabe entzogen, Dokument ohne Freigabe), sowie
+     * Medien, deren Drehung sich gegenüber der zuletzt übertragenen Version
+     * geändert hat: Item löschen, lokale ID leeren (Befund 4, Masterprompt 14).
      *
      * @param  list<string>  $warnungen
      */
-    private function verarbeiteAusgeblendete(Listing $listing, MultimediaService $multimedia, array &$warnungen): int
+    private function verarbeiteEntfernte(Listing $listing, ListingSnapshot $snapshot, ?ListingSnapshot $vorherige, MultimediaService $multimedia, array &$warnungen): int
     {
         $anzahl = 0;
+        $freigegeben = $this->freigegebeneIds($snapshot);
+        $rotationJetzt = $this->rotationen($snapshot);
+        $rotationVorher = $vorherige !== null ? $this->rotationen($vorherige) : [];
 
-        foreach ($this->ausgeblendeteMitItem($listing)->get() as $medium) {
+        foreach ($listing->media as $medium) {
+            if ($medium->flowfact_multimedia_id === null) {
+                continue;
+            }
+
+            $id = (int) $medium->getKey();
+            $inFreigabe = in_array($id, $freigegeben, true);
+            $gedreht = $inFreigabe && array_key_exists($id, $rotationVorher) && ($rotationVorher[$id] !== ($rotationJetzt[$id] ?? 0));
+
+            if ($inFreigabe && ! $gedreht) {
+                continue;
+            }
+
             $itemId = (string) $medium->flowfact_multimedia_id;
 
             try {
@@ -215,7 +318,7 @@ final class MediaSyncService
             } catch (AuthenticationException|RateLimitException $exception) {
                 throw $exception;
             } catch (FlowfactException $exception) {
-                $warnungen[] = sprintf('Ausgeblendetes Bild "%s" konnte in FLOWFACT nicht gelöscht werden: %s', $medium->dateiname_original, $exception->getMessage());
+                $warnungen[] = sprintf('Medium "%s" konnte in FLOWFACT nicht gelöscht werden: %s', $medium->dateiname_original, $exception->getMessage());
 
                 continue;
             }
@@ -230,19 +333,23 @@ final class MediaSyncService
     }
 
     /**
-     * @return HasMany<ListingMedia, Listing>
+     * @return array<int, int>
      */
-    private function ausgeblendeteMitItem(Listing $listing)
+    private function rotationen(ListingSnapshot $snapshot): array
     {
-        return $listing->media()
-            ->whereNotNull('flowfact_multimedia_id')
-            ->where(function ($query): void {
-                $query->where('im_inserat', false)->orWhere('typ', MediaTyp::Dokument->value);
-            });
+        $rotationen = [];
+
+        foreach ($snapshot->medien as $daten) {
+            if (isset($daten['id']) && is_numeric($daten['id'])) {
+                $rotationen[(int) $daten['id']] = (int) ($daten['rotation'] ?? 0);
+            }
+        }
+
+        return $rotationen;
     }
 
     /**
-     * Album und Kategorie je Schema, einmal ermittelt und in den Einstellungen
+     * Album und Kategorien je Schema, einmal ermittelt und in den Einstellungen
      * unter flowfact.album_<schema> abgelegt (offener Punkt 18 in
      * flowfact-api.md Abschnitt 9: die Namen sind kontospezifisch).
      *
@@ -261,7 +368,7 @@ final class MediaSyncService
             return [
                 'album' => (string) $gespeichert['album'],
                 'bilder' => (string) $gespeichert['bilder'],
-                'dokumente' => isset($gespeichert['dokumente']) ? (string) $gespeichert['dokumente'] : null,
+                'dokumente' => isset($gespeichert['dokumente']) && (string) $gespeichert['dokumente'] !== '' ? (string) $gespeichert['dokumente'] : null,
             ];
         }
 
@@ -316,36 +423,40 @@ final class MediaSyncService
     }
 
     /**
-     * Items der Entität (Kategorie IMAGE), einmal je Lauf gelesen und um neu
-     * registrierte Items ergänzt.
+     * Items der Entität je Kategorie (IMAGE oder DOCUMENT), einmal je Lauf
+     * gelesen und um neu registrierte Items ergänzt.
      *
      * @return array<string, array<string, mixed>>
      */
-    private function items(string $entityId, MultimediaService $multimedia): array
+    private function items(string $entityId, string $kategorie, MultimediaService $multimedia): array
     {
-        if ($this->items === null) {
-            $this->items = [];
+        if (! array_key_exists($kategorie, $this->items)) {
+            $this->items[$kategorie] = [];
 
-            foreach ($multimedia->items($entityId, 'IMAGE') as $item) {
+            foreach ($multimedia->items($entityId, $kategorie) as $item) {
                 if (isset($item['id']) && is_scalar($item['id'])) {
-                    $this->items[(string) $item['id']] = $item;
+                    $this->items[$kategorie][(string) $item['id']] = $item;
                 }
             }
         }
 
-        return $this->items;
+        return $this->items[$kategorie];
     }
 
     /**
      * Befund 6: Ist in FLOWFACT bereits ein Item mit dem deterministischen
      * Dateinamen dieses Mediums vorhanden (z. B. nach einer Zeitüberschreitung
      * beim Registrieren), wird dessen ID übernommen statt erneut hochzuladen.
+     *
+     * @param  array{medium: ListingMedia, titel: string|null, rotation: int, typ: string, istBild: bool, sortierung: int}  $eintrag
      */
-    private function uebernimmVorhandenesItem(Listing $listing, ListingMedia $medium, string $entityId, MultimediaService $multimedia): bool
+    private function uebernimmVorhandenesItem(Listing $listing, array $eintrag, string $entityId, MultimediaService $multimedia): bool
     {
-        $basis = $this->dateinameBasis($listing, $medium);
+        $medium = $eintrag['medium'];
+        $basis = $this->dateinameBasis($listing, $medium, $eintrag['rotation']);
+        $kategorie = $eintrag['istBild'] ? 'IMAGE' : 'DOCUMENT';
 
-        foreach ($this->items($entityId, $multimedia) as $id => $item) {
+        foreach ($this->items($entityId, $kategorie, $multimedia) as $id => $item) {
             $dateiname = $item['fileName'] ?? null;
 
             if (! is_string($dateiname) || pathinfo($dateiname, PATHINFO_FILENAME) !== $basis) {
@@ -366,92 +477,108 @@ final class MediaSyncService
     /**
      * Upload-Kette: Presigned-URL, PUT, Item registrieren, ID speichern.
      *
+     * @param  array{medium: ListingMedia, titel: string|null, rotation: int, typ: string, istBild: bool, sortierung: int}  $eintrag
      * @param  array{album: string, bilder: string, dokumente: string|null}  $album
      * @param  list<string>  $warnungen
      */
-    private function upload(Listing $listing, ListingMedia $medium, string $schema, string $entityId, array $album, MultimediaService $multimedia, array &$warnungen): bool
+    private function upload(Listing $listing, array $eintrag, string $schema, string $entityId, array $album, MultimediaService $multimedia, array &$warnungen): bool
     {
+        $medium = $eintrag['medium'];
         $inhalt = Storage::disk(self::DISK)->get($medium->pfad);
 
         if ($inhalt === null || $inhalt === '') {
-            $warnungen[] = sprintf('Datei für Bild "%s" nicht gefunden, Upload übersprungen.', $medium->dateiname_original);
+            $warnungen[] = sprintf('Datei für Medium "%s" nicht gefunden, Upload übersprungen.', $medium->dateiname_original);
 
             return false;
         }
 
-        try {
-            $bild = $this->resizer->resize($inhalt, $medium->mime);
-        } catch (Throwable $exception) {
-            $warnungen[] = sprintf('Bild "%s" konnte nicht verarbeitet werden: %s', $medium->dateiname_original, $exception->getMessage());
+        if ($eintrag['istBild']) {
+            try {
+                $bild = $this->resizer->resize($inhalt, (string) $medium->mime, $eintrag['rotation']);
+            } catch (Throwable $exception) {
+                $warnungen[] = sprintf('Bild "%s" konnte nicht verarbeitet werden: %s', $medium->dateiname_original, $exception->getMessage());
 
-            return false;
+                return false;
+            }
+
+            $content = $bild['content'];
+            $mime = $bild['mime'];
+            $erweiterung = $bild['extension'];
+            $kategorie = $album['bilder'];
+        } else {
+            $content = $inhalt;
+            $mime = (string) ($medium->mime ?: 'application/octet-stream');
+            $erweiterung = strtolower(pathinfo((string) $medium->dateiname_original, PATHINFO_EXTENSION)) ?: 'pdf';
+            $kategorie = (string) $album['dokumente'];
         }
 
-        $dateiname = $this->dateiname($listing, $medium, $bild['extension']);
-        $groesse = strlen($bild['content']);
+        $dateiname = $this->dateiname($listing, $medium, $erweiterung, $eintrag['rotation']);
+        $groesse = strlen($content);
 
-        $presigned = $multimedia->presignedUrl($schema, $entityId, $bild['mime'], $dateiname, $groesse);
+        $presigned = $multimedia->presignedUrl($schema, $entityId, $mime, $dateiname, $groesse);
 
         if ($presigned['presignedUrl'] === '' || $presigned['itemLink'] === '') {
-            $warnungen[] = sprintf('FLOWFACT hat für Bild "%s" keine Upload-URL geliefert.', $medium->dateiname_original);
+            $warnungen[] = sprintf('FLOWFACT hat für Medium "%s" keine Upload-URL geliefert.', $medium->dateiname_original);
 
             return false;
         }
 
-        $multimedia->uploadBinary($presigned['presignedUrl'], $bild['content'], $bild['mime']);
+        $multimedia->uploadBinary($presigned['presignedUrl'], $content, $mime);
 
         $body = [
-            'contentType' => $bild['mime'],
+            'contentType' => $mime,
             'fileName' => $dateiname,
             'fileSize' => $groesse,
             'itemLink' => $presigned['itemLink'],
             'albumAssignments' => [
-                ['albumName' => $album['album'], 'categories' => [$album['bilder']]],
+                ['albumName' => $album['album'], 'categories' => [$kategorie]],
             ],
         ];
 
-        $titel = $this->normalisierterTitel($medium->titel);
-
-        if ($titel !== null) {
-            $body['title'] = $titel;
+        if ($eintrag['titel'] !== null) {
+            $body['title'] = $eintrag['titel'];
         }
 
         $item = $multimedia->registerItem($schema, $entityId, $body);
 
         if (! isset($item['id']) || ! is_scalar($item['id'])) {
-            $warnungen[] = sprintf('FLOWFACT hat für Bild "%s" keine Item-ID geliefert.', $medium->dateiname_original);
+            $warnungen[] = sprintf('FLOWFACT hat für Medium "%s" keine Item-ID geliefert.', $medium->dateiname_original);
 
             return false;
         }
 
-        if ($this->items !== null) {
-            $this->items[(string) $item['id']] = $item;
+        $kategorieSchluessel = $eintrag['istBild'] ? 'IMAGE' : 'DOCUMENT';
+
+        if (array_key_exists($kategorieSchluessel, $this->items)) {
+            $this->items[$kategorieSchluessel][(string) $item['id']] = $item;
         }
 
         // saveQuietly: die FLOWFACT-ID ist kein Inhalt des Inserats und darf
         // keine Änderungsmarkierung auslösen.
         $medium->flowfact_multimedia_id = (string) $item['id'];
-        $medium->flowfact_titel = $titel;
+        $medium->flowfact_titel = $eintrag['titel'];
         $medium->saveQuietly();
 
         return true;
     }
 
     /**
-     * Befund 4: geänderte Bildtitel über PATCH /items/{id} (JSON-Patch)
-     * nachziehen und den übertragenen Stand in flowfact_titel merken.
+     * Befund 4: geänderte Titel (aus der Freigabe) über PATCH /items/{id}
+     * (JSON-Patch) nachziehen und den übertragenen Stand in flowfact_titel merken.
      *
-     * @param  Collection<int, ListingMedia>  $medien
+     * @param  list<array{medium: ListingMedia, titel: string|null, rotation: int, typ: string, istBild: bool, sortierung: int}>  $eintraege
      * @param  list<string>  $warnungen
      */
-    private function gleicheTitelAb($medien, MultimediaService $multimedia, array &$warnungen): void
+    private function gleicheTitelAb(array $eintraege, MultimediaService $multimedia, array &$warnungen): void
     {
-        foreach ($medien as $medium) {
-            if ($medium->flowfact_multimedia_id === null || ! $this->titelWeichtAb($medium)) {
+        foreach ($eintraege as $eintrag) {
+            $medium = $eintrag['medium'];
+
+            if ($medium->flowfact_multimedia_id === null || ! $this->titelWeichtAb($eintrag)) {
                 continue;
             }
 
-            $titel = $this->normalisierterTitel($medium->titel);
+            $titel = $eintrag['titel'];
             $patch = $titel === null
                 ? [['op' => 'remove', 'path' => '/title']]
                 : [['op' => 'replace', 'path' => '/title', 'value' => $titel]];
@@ -461,7 +588,7 @@ final class MediaSyncService
             } catch (AuthenticationException|RateLimitException $exception) {
                 throw $exception;
             } catch (FlowfactException $exception) {
-                $warnungen[] = sprintf('Titel von Bild "%s" konnte in FLOWFACT nicht geändert werden: %s', $medium->dateiname_original, $exception->getMessage());
+                $warnungen[] = sprintf('Titel von Medium "%s" konnte in FLOWFACT nicht geändert werden: %s', $medium->dateiname_original, $exception->getMessage());
 
                 continue;
             }
@@ -471,9 +598,12 @@ final class MediaSyncService
         }
     }
 
-    private function titelWeichtAb(ListingMedia $medium): bool
+    /**
+     * @param  array{medium: ListingMedia, titel: string|null, rotation: int, typ: string, istBild: bool, sortierung: int}  $eintrag
+     */
+    private function titelWeichtAb(array $eintrag): bool
     {
-        return $this->normalisierterTitel($medium->titel) !== $this->normalisierterTitel($medium->flowfact_titel);
+        return $eintrag['titel'] !== $this->normalisierterTitel($eintrag['medium']->flowfact_titel);
     }
 
     private function normalisierterTitel(?string $titel): ?string
@@ -491,18 +621,20 @@ final class MediaSyncService
      * Reihenfolge über die Sortierung der Albumzuordnung, Titelbild an
      * Position 0 (flowfact-api.md Abschnitt 8, Schritt 5).
      *
-     * @param  Collection<int, ListingMedia>  $medien
+     * @param  list<array{medium: ListingMedia, titel: string|null, rotation: int, typ: string, istBild: bool, sortierung: int}>  $bilder
      * @param  array{album: string, bilder: string, dokumente: string|null}  $album
      * @param  list<string>  $warnungen
      */
-    private function setzeReihenfolge($medien, string $schema, string $entityId, array $album, MultimediaService $multimedia, array &$warnungen): void
+    private function setzeReihenfolge(array $bilder, string $schema, string $entityId, array $album, MultimediaService $multimedia, array &$warnungen): void
     {
-        $items = $this->items($entityId, $multimedia);
+        $items = $this->items($entityId, 'IMAGE', $multimedia);
 
         $zuordnung = [];
         $position = 0;
 
-        foreach ($medien as $medium) {
+        foreach ($bilder as $eintrag) {
+            $medium = $eintrag['medium'];
+
             if ($medium->flowfact_multimedia_id === null) {
                 continue;
             }
@@ -527,8 +659,10 @@ final class MediaSyncService
         }
     }
 
-    private function dateinameBasis(Listing $listing, ListingMedia $medium): string
+    private function dateinameBasis(Listing $listing, ListingMedia $medium, int $rotation = 0): string
     {
-        return sprintf('%s-%d-%s', $listing->uuid, $medium->id, substr((string) $medium->pruefsumme_sha256, 0, 12));
+        $basis = sprintf('%s-%d-%s', $listing->uuid, $medium->id, substr((string) $medium->pruefsumme_sha256, 0, 12));
+
+        return $rotation !== 0 ? $basis.'-r'.$rotation : $basis;
     }
 }

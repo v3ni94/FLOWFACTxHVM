@@ -12,10 +12,8 @@ use App\Models\Listing;
  * (ADR-009). Interne Felder gehen nie in den Prompt. Der Aufruf erfolgt nur auf
  * ausdrückliche Anforderung des Benutzers, Ergebnisse werden gespeichert.
  */
-interface TextGenerator
+interface TextGenerator extends KiFaehig
 {
-    public function isConfigured(): bool;
-
     public function modell(): string;
 
     /**

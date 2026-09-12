@@ -9,9 +9,21 @@ use Database\Factories\ListingPortalPublicationFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 /**
- * Portalveröffentlichung (Datenvertrag Abschnitt 2.9, 4.3).
+ * Portalveröffentlichung (Datenvertrag Abschnitt 2.9, 4.3, Masterprompt-Abgleich B.6).
+ *
+ * Jeder Statuswechsel läuft über App\Flowfact\Sync\PortalStatusTransition, die
+ * den Nachweis in listing_portal_status_logs schreibt. release_id ist die
+ * Freigabeversion, mit der die Veröffentlichung zuletzt angefordert wurde.
+ *
+ * @property int $listing_id
+ * @property string $portal_id
+ * @property string $portal_name
+ * @property PortalStatus $status
+ * @property int|null $release_id
+ * @property string|null $letzter_fehler
  */
 class ListingPortalPublication extends Model
 {
@@ -40,5 +52,21 @@ class ListingPortalPublication extends Model
     public function listing(): BelongsTo
     {
         return $this->belongsTo(Listing::class);
+    }
+
+    /**
+     * @return BelongsTo<ListingRelease, $this>
+     */
+    public function release(): BelongsTo
+    {
+        return $this->belongsTo(ListingRelease::class, 'release_id');
+    }
+
+    /**
+     * @return HasMany<ListingPortalStatusLog, $this>
+     */
+    public function statusLogs(): HasMany
+    {
+        return $this->hasMany(ListingPortalStatusLog::class, 'publication_id')->orderBy('id');
     }
 }

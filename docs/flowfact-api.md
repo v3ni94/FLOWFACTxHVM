@@ -886,6 +886,16 @@ Nicht aus dem SDK belegbar. Vor Produktivsetzung mit einem Testkonto klären und
 28. Verfügbarkeit einer Staging-Umgebung (`api.staging.cloudios.flowfact-prod.cloud`) für Kunden.
 29. Löschsemantik leerer Wertelisten: Ob `PATCH /schemas/{schemaId}/entities/{entityId}` mit `{ feld: { "values": [] } }` den Feldwert löscht oder ignoriert (der Connector sendet diese Form für lokal geleerte Felder, abschaltbar über die Einstellung `flowfact.leere_felder_loeschen`); ebenso, ob `PATCH /items/{mediaItemId}` mit JSON-Patch `replace /title` beziehungsweise `remove /title` akzeptiert wird.
 
+**Ergänzungen aus Welle 3 (Freigabeversionen, Fall B, Konflikterkennung; Stand 12.09.2026)**
+
+30. `_metadata.lastModifiedTimestamp`: Ob das Feld in den Antworten von `POST /schemas/{schemaId}` (Anlage), `PATCH /schemas/{schemaId}/entities/{entityId}` und `GET /schemas/{schemaId}/entities/{entityId}` geliefert wird, in welcher Einheit (vermutlich Unix-Millisekunden) und ob ersatzweise `_metadata.timestamp` den letzten Änderungszeitpunkt trägt. Der Connector speichert den Wert als Zeichenkette (`listing_flowfact_links.flowfact_last_modified`) und vergleicht ihn vor jedem PATCH (Einstellung `flowfact.konfliktverhalten`). Der Smoke-Test meldet in Schritt 6 bis 8, ob der Wert vorhanden ist.
+31. Ob Medienoperationen (Upload, Zuordnung, Löschen von Items) den `lastModifiedTimestamp` der Estate-Entität verändern. Falls ja, würde jeder Folgelauf einen Konflikt melden; dann ist `flowfact.konfliktverhalten = ueberschreiben` zu setzen oder der Zeitpunkt nach dem Medienabgleich erneut zu lesen (Codeänderung im Connector).
+32. Fall B: Ob `POST /publish` bei fehlendem Veröffentlichungsrecht mit HTTP 401 oder 403 antwortet oder mit 2xx und einem Körper, der das Portal unter `portalsWithoutAccessRights` (Bulk-Form) nennt. Der Connector behandelt beide Formen als `manuelle_freigabe_erforderlich`; die tatsächliche Form ist am Konto mit einem Benutzer ohne Portalrecht zu prüfen.
+33. `showAddress` bei Adressfreigabe "nur PLZ und Ort": Der Connector überträgt die Adresse einschließlich Straße im Feld `addresses` und setzt `showAddress = false` nur im Publish-Request. Ob FLOWFACT die Straße dann gegenüber allen Portaltypen (IS24, OpenImmo) verbirgt oder ob zusätzlich `POST /portals/{portalId}/estates/{estateId}` mit `showAddress` nötig ist, ist zu prüfen (Smoke-Test Zeile 15a).
+34. Rücklesen nach `targetStatus OFFLINE`: Ob `GET /estates/{estateId}/portals` den Eintrag entfernt oder mit leerem `onlineSince` weiterführt. Der Connector wertet beides als bestätigte Deaktivierung.
+35. Dokumente: Ob das Estate-Album eine Kategorie mit `allowedContentCategories` `DOCUMENT` enthält und ob Dokumente über denselben Presigned-Weg wie Bilder hochgeladen werden (`contentType application/pdf`). Ohne Dokumentkategorie überträgt der Connector keine Dokumente und meldet eine Warnung.
+36. Codes: `02MFH` (Mehrfamilienhaus), `05L` (Ladenfläche) und `let` (boolean, vermietet) sind im SDK-Typ belegt, am Konto aber nicht bestätigt; Codes für Lagerfläche und Stellplatz/Garage fehlen. Ohne `objektart.stellplatz` in `flowfact.codezuordnung` wird ein Stellplatz nicht übertragen.
+
 ---
 
 ## 10. Empfohlene Reihenfolge für den Connector-Smoke-Test

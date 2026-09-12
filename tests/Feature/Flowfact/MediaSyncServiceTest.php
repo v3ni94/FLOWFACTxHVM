@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Feature\Flowfact;
 
+use App\Domain\Listing\ListingSnapshot;
 use App\Enums\MediaTyp;
 use App\Flowfact\Sync\ListingMediaDeletion;
 use App\Flowfact\Sync\MediaSyncService;
@@ -59,6 +60,14 @@ final class MediaSyncServiceTest extends FlowfactTestCase
         return $listing->fresh(['media']);
     }
 
+    /**
+     * Momentaufnahme des Live-Stands als Ersatz für eine Freigabeversion (B.6).
+     */
+    private function snapshot(Listing $listing): ListingSnapshot
+    {
+        return ListingSnapshot::fromListing($listing->fresh(['media']));
+    }
+
     private function fakeUploadKette(): FakeFlowfact
     {
         $naechsteId = 100;
@@ -81,7 +90,7 @@ final class MediaSyncServiceTest extends FlowfactTestCase
         $listing = $this->listingMitBildern(2);
         $fake = $this->fakeUploadKette();
 
-        $ergebnis = app(MediaSyncService::class)->sync($listing, self::SCHEMA_MIETE, 'ent-1');
+        $ergebnis = app(MediaSyncService::class)->sync($listing, $this->snapshot($listing), self::SCHEMA_MIETE, 'ent-1');
 
         self::assertSame([], $ergebnis->warnungen);
         self::assertSame(2, $ergebnis->hochgeladen);
@@ -135,7 +144,7 @@ final class MediaSyncServiceTest extends FlowfactTestCase
         $this->settings()->set('flowfact.album_'.self::SCHEMA_MIETE, ['album' => 'estate_album', 'bilder' => 'images', 'dokumente' => null]);
         $fake = $this->fakeUploadKette();
 
-        $ergebnis = app(MediaSyncService::class)->sync($listing->fresh(['media']), self::SCHEMA_MIETE, 'ent-1');
+        $ergebnis = app(MediaSyncService::class)->sync($listing->fresh(['media']), $this->snapshot($listing), self::SCHEMA_MIETE, 'ent-1');
 
         self::assertSame(1, $ergebnis->hochgeladen);
         self::assertSame(0, $fake->count('GET', self::ALBUMS));
@@ -152,9 +161,9 @@ final class MediaSyncServiceTest extends FlowfactTestCase
         $fake = $this->fakeUploadKette();
 
         $service = app(MediaSyncService::class);
-        self::assertFalse($service->hatOffeneArbeit($listing));
+        self::assertFalse($service->hatOffeneArbeit($listing, $this->snapshot($listing)));
 
-        $ergebnis = $service->sync($listing->fresh(['media']), self::SCHEMA_MIETE, 'ent-1');
+        $ergebnis = $service->sync($listing->fresh(['media']), $this->snapshot($listing), self::SCHEMA_MIETE, 'ent-1');
 
         self::assertSame(0, $ergebnis->hochgeladen);
         self::assertSame(0, $fake->count('PUT', self::ASSIGN));
@@ -172,7 +181,7 @@ final class MediaSyncServiceTest extends FlowfactTestCase
         ListingMedia::factory()->create(['listing_id' => $listing->id, 'typ' => MediaTyp::Grundriss, 'pfad' => $pfad, 'im_inserat' => true, 'sortierung' => 2]);
         $fake = $this->fakeUploadKette();
 
-        $ergebnis = app(MediaSyncService::class)->sync($listing->fresh(['media']), self::SCHEMA_MIETE, 'ent-1');
+        $ergebnis = app(MediaSyncService::class)->sync($listing->fresh(['media']), $this->snapshot($listing), self::SCHEMA_MIETE, 'ent-1');
 
         self::assertSame(1, $ergebnis->hochgeladen);
         self::assertSame(1, $fake->count('POST', self::REGISTER));
@@ -193,7 +202,7 @@ final class MediaSyncServiceTest extends FlowfactTestCase
 
         $fake = $this->fakeUploadKette();
 
-        $ergebnis = app(MediaSyncService::class)->sync($listing->fresh(['media']), self::SCHEMA_MIETE, 'ent-1');
+        $ergebnis = app(MediaSyncService::class)->sync($listing->fresh(['media']), $this->snapshot($listing), self::SCHEMA_MIETE, 'ent-1');
 
         self::assertSame(1, $ergebnis->geloescht);
         self::assertSame(1, $fake->count('DELETE', self::DELETE_ITEM));
@@ -220,7 +229,7 @@ final class MediaSyncServiceTest extends FlowfactTestCase
             ->on('GET', self::ALBUMS, self::albumsResponse())
             ->on('GET', self::ITEMS, [])
             ->install();
-        $ergebnis = app(MediaSyncService::class)->sync($listing->fresh(['media']), self::SCHEMA_MIETE, 'ent-1');
+        $ergebnis = app(MediaSyncService::class)->sync($listing->fresh(['media']), $this->snapshot($listing), self::SCHEMA_MIETE, 'ent-1');
 
         self::assertStringContainsString('nicht gefunden', $ergebnis->warnungen[0]);
     }
@@ -232,7 +241,7 @@ final class MediaSyncServiceTest extends FlowfactTestCase
         $fake = $this->fake()
             ->on('GET', self::ALBUMS, [['id' => 'a', 'name' => 'docs', 'categories' => [['name' => 'documents', 'allowedContentCategories' => ['DOCUMENT']]]]])
             ->install();
-        $ergebnis = app(MediaSyncService::class)->sync($listing, self::SCHEMA_MIETE, 'ent-1');
+        $ergebnis = app(MediaSyncService::class)->sync($listing, $this->snapshot($listing), self::SCHEMA_MIETE, 'ent-1');
 
         self::assertStringContainsString('Kein Album mit Bildkategorie', $ergebnis->warnungen[0]);
         self::assertSame(0, $fake->count('GET', self::PRESIGNED));

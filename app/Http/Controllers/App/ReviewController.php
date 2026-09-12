@@ -152,7 +152,11 @@ class ReviewController extends Controller
 
         $ergebnis = $publishingService->publish($listing, $portale, $request->user());
 
-        if ($ergebnis->ok) {
+        // Fall B (Masterprompt 20): Der Veröffentlichungsaufruf ist nicht
+        // autorisiert, das Objekt ist aber vollständig in FLOWFACT vorbereitet.
+        // Dann bleibt der Bearbeitungsstatus bereit; nur eine tatsächlich
+        // angeforderte Veröffentlichung führt nach veroeffentlicht.
+        if ($ergebnis->ok && ! $ergebnis->nurManuelleFreigabe() && $ergebnis->angefordert > 0) {
             $statusMachine = app(ListingStatusMachine::class);
 
             try {
@@ -195,6 +199,8 @@ class ReviewController extends Controller
                     PortalStatus::Aktiv->value,
                     PortalStatus::Fehler->value,
                     PortalStatus::Unbekannt->value,
+                    PortalStatus::ManuelleFreigabeErforderlich->value,
+                    PortalStatus::DeaktivierungAngefordert->value,
                 ])
                 ->pluck('portal_id')
                 ->all();
