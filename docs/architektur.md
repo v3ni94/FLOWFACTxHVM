@@ -139,24 +139,43 @@ werden auf 4 KB gekürzt.
 app/
   Console/Commands/        flow:install, flow:check-config, flow:user:create, flow:portal-status, flow:flowfact:smoke, flow:flowfact:schema
   Domain/
-    Listing/               Enums, RentCalculator, CompletenessCheck, ListingStatusMachine
+    Listing/               Enums, RentCalculator, PriceStructure, CompletenessCheck, Befund, ListingStatusMachine,
+                           ReleaseService, EnergyRequirements, Merkmale, ListingChangeTracker, ListingContentHasher,
+                           ListingSnapshot, PublishableFields (Positivliste der Inseratsfelder)
+    Numbering/             Vergabe der Objektnummer (Format MF-JJJJ-NNNN)
     Security/              TimeBasedOneTimePassword, Base32, RecoveryCodeGenerator (übernommen)
+    Settings/              SettingsRepository (settings-Tabelle, verschlüsselte Werte)
   Flowfact/
-    Client/                FlowfactClient, TokenProvider, TransferLogMiddleware
-    Mapping/               FlowfactPayloadMapper (Positivliste), FieldCatalog
-    Sync/                  TransferListingJob, UploadMediaJob, PublishJob, PortalStatusJob, SyncLease
+    Client/                FlowfactClient, SettingsTokenProvider, TransferLogMiddleware, TokenScrubber, Exceptions
+    Mapping/                FlowfactPayloadMapper (Positivliste), FieldCatalog, FieldMappingResolver
+    Query/                 Flowdsl (Suchsyntax nach Objektnummer)
+    Services/               SchemaService, EntityService, SearchService, MultimediaService, PortalService,
+                           UserService, CompanyService
+    Sync/                  PublishingService-Schnittstelle, FlowfactPublishingService, NullPublishingService,
+                           ListingSyncService, MediaSyncService, PortalStatusTransition, ReleaseGuard, SyncLease,
+                           Sync/Jobs/ (TransferListingJob, RefreshPortalStatusJob)
   Http/
-    Controllers/Auth/      Login, Logout, TwoFactorChallenge, TwoFactorSetup
-    Controllers/App/       Dashboard, ListingWizard (ein Controller je Schritt), Media, Texts, Publish, TransferLog
-    Controllers/Admin/     Users, FlowfactSettings, Portals, CompanySettings, AiSettings
+    Controllers/Auth/      LoginController, InvitationController, ForgotPasswordController, ResetPasswordController,
+                           TwoFactorChallengeController
+    Controllers/Account/   AccountController, PasswordController, TwoFactorController
+    Controllers/App/       DashboardController, ListingController (Übersicht, Anlage, Historie, Duplizieren),
+                           Steps/ (Schritt1Controller bis Schritt8Controller, je StepHandler), ReviewController
+                           (Prüfen und veröffentlichen), ListingMediaController, ListingTextController,
+                           MediaStreamController
+    Controllers/Admin/     UserController, FlowfactSettingsController, FlowfactMappingController,
+                           KiSettingsController, DefaultsController
     Middleware/            SecurityHeaders, ForceHttps, EnsureRole
-    Requests/              Formulare je Wizardschritt
-  Models/                  User, Listing, ListingPrice, ListingEnergy, ListingInternal, ListingMedia,
-                           ListingText, ListingFlowfactLink, ListingPortalPublication, TransferLog, Setting
+    Requests/               Formulare je Wizardschritt und je Adminformular
+  Models/                  User, UserInvitation, Listing, ListingPrice, ListingEnergy, ListingInternal,
+                           ListingMedia, ListingText, ListingChange, ListingFlowfactLink, ListingRelease,
+                           ListingPortalPublication, ListingPortalStatusLog, TransferLog, KiUsage, Setting
   Policies/                ListingPolicy, UserPolicy
-  Services/Ai/             TextGenerator, Provider-Interface, AnthropicProvider, FakeProvider
+  Services/Ai/             TextGenerator/TextReviser-Schnittstellen, AnthropicTextGenerator, AnthropicTextReviser,
+                           FakeTextGenerator, FakeTextReviser, PromptBuilder, HiddenAddressGuard, KiAnbieterResolver
+  Services/Media/          MediaUploadService (Prüfung, Speicherung, Drehen, Verkleinerung)
 database/migrations/
-resources/views/           layouts, components/flow/*, auth, app, admin
+resources/views/           layouts, components/flow/*, auth, account, app (dashboard, listings/schritte, pruefen,
+                           historie), admin
 public/css/flow.css        Designtokens und Komponenten (kein Build)
 public/js/flow.js          Formularhilfen ohne Framework
 routes/web.php
@@ -216,6 +235,10 @@ und 11.4 aus, vorwärts und rückwärts.
 | 3 | Erfassungsassistent, Medien, Texte, Dashboard (Sonnet) parallel zum FLOWFACT-Connector mit Adminbereich und Smoke-Test (Fable) | Sonnet und Fable | 354 Tests |
 | 4 | KI-Texte mit dem Anthropic-SDK und Adminbereich (Sonnet) parallel zur kritischen Gesamtprüfung (Fable, nur lesend) | Sonnet und Fable | 390 Tests, Prüfbericht mit 19 Befunden |
 | 5 | Behebung der Befunde: Connector, Sync, Jobs (Fable) parallel zu Assistent, Medien, Sitzung (Sonnet), Regressionstests aus den Nachweisen des Prüfers | Fable und Sonnet | 439 Tests |
+| Welle 1 | Datenmodell und Domäne nach Masterprompt-Abgleich B.2, B.4, B.5, B.6 erweitert; Benutzerrollen, Rechte, Einladungen, Passwort-Reset | Sonnet und Fable | 559 Tests |
+| Welle 2 | Neuer Erfassungsassistent mit acht Schritten und Autosave; Prüfen und veröffentlichen, Dashboard, Objektliste, Historie, Duplizieren | Sonnet und Fable | 625 Tests |
+| Welle 3 | Connector: Freigabeversionen, Fall B, Deaktivierung je Portal, Job-Schutz, Konflikterkennung; KI-Überarbeitungen, Vorlagenmodus, Adressprüfung, Medien drehen und Kategorien | Sonnet und Fable | 713 Tests |
+| Welle 4 | Dokumente (CLAUDE.md, Benutzer- und Adminanleitung, Backup und Restore, Fähigkeitsmatrix, Abnahmeprotokoll, Datenflüsse); kritische Prüfung und Behebung | Sonnet und Fable | 713 Tests (reine Dokumentationsarbeit, keine neuen Tests durch diesen Auftrag) |
 
 Höchstens zwei Entwicklungsagenten gleichzeitig, getrennte Dateibereiche je Auftrag, Integration, Commits und
 Stichprobenprüfung durch den Leitagenten. Ein erster Versuch, die SDK-Extraktion mit Sonnet als verschachteltes

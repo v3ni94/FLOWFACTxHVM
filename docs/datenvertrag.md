@@ -3,6 +3,12 @@
 Stand: 11.09.2026. Verbindliche fachliche Vorgabe für alle Module. Änderungen an diesem Dokument
 erfolgen nur durch den Leitagenten oder die Geschäftsführung.
 
+**Hinweis:** Dieses Dokument gilt fachlich fort, ist aber seit der zweiten Iteration in mehreren Punkten
+erweitert. Die erweiterten Felder, Berechtigungen, Prüfebenen, Energieausweisregeln, Freigabeversionen und
+insbesondere die **neue Schrittfolge des Erfassungsassistenten** (acht Schritte in geänderter Reihenfolge,
+löst Abschnitt 5 dieses Dokuments fachlich ab) stehen in [masterprompt-abgleich.md](masterprompt-abgleich.md)
+Abschnitt B. Bei einem Widerspruch zwischen diesem Dokument und Abschnitt B gilt Abschnitt B.
+
 Zweck der Anwendung: Mitarbeiter der Hausverwaltung Müller GmbH erfassen ein Miet- oder Kaufobjekt
 in wenigen Schritten, laden Bilder hoch, erzeugen oder schreiben die Inseratstexte und veröffentlichen
 das Objekt über FLOWFACT auf den ausgewählten Portalen. Die Anwendung ersetzt nicht FLOWFACT, sie ist

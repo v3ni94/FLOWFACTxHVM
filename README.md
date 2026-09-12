@@ -18,6 +18,13 @@ Ziel-Domain: flowfact.muellerhv.de. Betrieb auf IONOS Webhosting, PHP 8.3, Maria
 | [docs/ui-klassen.md](docs/ui-klassen.md) | Klassenvertrag für alle Ansichten (kein Frontend-Build) |
 | [docs/betrieb/installation.md](docs/betrieb/installation.md) | Installation und Betrieb auf IONOS Webhosting |
 | [docs/offene-punkte.md](docs/offene-punkte.md) | Klärungspunkte für den Betreiber und getroffene Annahmen |
+| [docs/faehigkeitsmatrix.md](docs/faehigkeitsmatrix.md) | Jede Connector-Funktion mit Quelle, Schnittstelle, Berechtigung und ehrlichem Teststatus (simuliert oder nicht getestet) |
+| [docs/masterprompt-abgleich.md](docs/masterprompt-abgleich.md) | Abgleich mit dem Masterprompt, Auftrag der zweiten Iteration, Abschnitt B ergänzt den Datenvertrag |
+| [docs/benutzeranleitung.md](docs/benutzeranleitung.md) | Anleitung für Mitarbeiter: Anmeldung, Erfassungsassistent, Prüfen und veröffentlichen |
+| [docs/adminanleitung.md](docs/adminanleitung.md) | Anleitung für Administratoren: Benutzer, Rollen, FLOWFACT- und KI-Einstellungen, Vorgaben, Betriebsprüfung |
+| [docs/betrieb/backup-und-restore.md](docs/betrieb/backup-und-restore.md) | Sicherung und Wiederherstellung auf IONOS Webhosting |
+| [docs/abnahmeprotokoll.md](docs/abnahmeprotokoll.md) | Vorlage für den Abnahmetest mit Nachweis je Kriterium sowie Zeit- und Klickmessung |
+| [docs/datenfluesse.md](docs/datenfluesse.md) | Externe Datenflüsse (FLOWFACT, Anthropic, SMTP), Speicherorte, Löschung, datenschutzrechtliche Prüfpunkte |
 | docs/pruefbericht-*.md | Ergebnisse der kritischen Prüfung vor Übergabe |
 
 ## Technischer Stack
@@ -65,12 +72,16 @@ Scheduler: ein Cronjob pro Minute `php artisan schedule:run`, alternativ `POST /
 | Pfad | Bereich | Rolle |
 | --- | --- | --- |
 | `/login`, `/two-factor/challenge` | Anmeldung, optionaler Zweitfaktor | alle |
+| `/passwort-vergessen`, `/passwort-zuruecksetzen/{token}` | Passwort vergessen und zurücksetzen | nicht angemeldet |
+| `/einladung/{token}` | Einladung annehmen, Passwort vergeben | nicht angemeldet, per Einladungslink |
 | `/app/dashboard` | Kennzahlen, letzte Objekte, Hinweis bei ausgefallener Hintergrundverarbeitung | alle |
-| `/app/objekte` | Objektübersicht, Erfassungsassistent in acht Schritten, Detailseite mit Statusachsen und Protokoll | alle |
+| `/app/objekte` | Objektübersicht, Erfassungsassistent in acht Schritten, Detailseite mit Statusachsen und Protokoll, Historie, Duplizieren | admin, mitarbeiter (lesend auch leser) |
+| `/app/objekte/{id}/pruefen` | Prüfen und veröffentlichen: Vorschau, vier Prüfebenen, Portalauswahl, Veröffentlichen, Deaktivieren | admin, mitarbeiter mit "Darf veröffentlichen" |
 | `/account` | Passwort, Zweitfaktor aktivieren oder deaktivieren, Wiederherstellungscodes | alle |
-| `/admin/users` | Benutzerverwaltung | admin |
+| `/admin/users` | Benutzerverwaltung, Einladungen | admin |
 | `/admin/flowfact` | API-Token, Verbindungstest, Schemaauswahl, Feld- und Codezuordnung, Protokoll | admin |
 | `/admin/ki` | KI-Anbieter, Modell, Schlüssel, Verbrauch | admin |
+| `/admin/vorgaben` | Land, Ansprechpartner, Portalvorauswahl, Bezeichnungsmuster, Textbausteine | admin |
 
 ## Verbindliche Regeln
 
