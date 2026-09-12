@@ -45,11 +45,14 @@ class AppServiceProvider extends ServiceProvider
         $this->app->bind(TextGenerator::class, function ($app): TextGenerator {
             $anthropic = $app->make(AnthropicTextGenerator::class);
 
-            // Überarbeitung vorhandener Texte (Masterprompt 16). Die KI-Umsetzung folgt in Welle 3.
-            $this->app->bind(TextReviser::class, FakeTextReviser::class);
-
             return $anthropic->isConfigured() ? $anthropic : $app->make(FakeTextGenerator::class);
         });
+
+        // Überarbeitung vorhandener Texte (Masterprompt Abschnitt 16): kürzer,
+        // sachlicher, sprachlich verbessern. Eigenständig gebunden, unabhängig
+        // davon, ob TextGenerator zuvor aufgelöst wurde. Die KI-Umsetzung folgt
+        // in Welle 3, bis dahin bleibt der regelbasierte FakeTextReviser aktiv.
+        $this->app->bind(TextReviser::class, FakeTextReviser::class);
     }
 
     /**

@@ -5,8 +5,16 @@
 @section('content')
     <div class="page-header">
         <h1>Übersicht</h1>
+        <p class="hint">Immobilien einfach erfassen und veröffentlichen</p>
         <div class="page-actions">
-            <a href="{{ route('app.listings.index') }}" class="btn btn-primary">Neues Objekt</a>
+            @can('create', \App\Models\Listing::class)
+                <form method="POST" action="{{ route('app.listings.create') }}">
+                    @csrf
+                    <input type="hidden" name="vermarktungsart" value="miete">
+                    <input type="hidden" name="objektart" value="wohnung">
+                    <button type="submit" class="btn btn-primary btn-lg">Müller FLOW starten</button>
+                </form>
+            @endcan
         </div>
     </div>
 
@@ -17,31 +25,30 @@
     @endif
 
     <div class="grid grid-3">
-        <div class="stat">
-            <div class="stat-value">{{ $kennzahlen['entwuerfe'] }}</div>
-            <div class="stat-label">Entwürfe</div>
-        </div>
-        <div class="stat">
-            <div class="stat-value">{{ $kennzahlen['bereit'] }}</div>
-            <div class="stat-label">Bereit</div>
-        </div>
-        <div class="stat">
-            <div class="stat-value">{{ $kennzahlen['veroeffentlicht'] }}</div>
-            <div class="stat-label">Veröffentlicht</div>
-        </div>
-        <div class="stat">
+        <a href="{{ route('app.listings.index', ['bearbeiter' => $user->id, 'status' => 'entwurf']) }}" class="stat">
+            <div class="stat-value">{{ $kennzahlen['meine_entwuerfe'] }}</div>
+            <div class="stat-label">Meine Entwürfe</div>
+        </a>
+        <a href="{{ route('app.listings.index') }}" class="stat">
+            <div class="stat-value">{{ $kennzahlen['alle_immobilien'] }}</div>
+            <div class="stat-label">Alle Immobilien</div>
+        </a>
+        <a href="{{ route('app.listings.index', ['status' => 'veroeffentlicht']) }}" class="stat">
+            <div class="stat-value">{{ $kennzahlen['veroeffentlichungen_aktiv'] }}</div>
+            <div class="stat-label">Veröffentlichungen (aktiv)</div>
+        </a>
+        <a href="{{ route('app.listings.index') }}" class="stat">
             <div class="stat-value">{{ $kennzahlen['uebertragungsfehler'] }}</div>
             <div class="stat-label">Übertragungsfehler</div>
-        </div>
+        </a>
     </div>
 
     <div class="card">
-        <div class="card-title">Zuletzt geänderte Objekte</div>
+        <div class="card-title">Meine Entwürfe</div>
         <div class="card-body">
-            @if ($letzteObjekte->isEmpty())
+            @if ($meineEntwuerfe->isEmpty())
                 <div class="empty-state">
-                    <p>Es sind noch keine Objekte angelegt.</p>
-                    <a href="{{ route('app.listings.index') }}" class="btn btn-primary">Neues Objekt</a>
+                    <p>Sie haben noch keine Objekte in Bearbeitung.</p>
                 </div>
             @else
                 <div class="table-wrap">
@@ -56,10 +63,10 @@
                             </tr>
                         </thead>
                         <tbody>
-                            @foreach ($letzteObjekte as $objekt)
+                            @foreach ($meineEntwuerfe as $objekt)
                                 <tr>
                                     <td><a href="{{ route('app.listings.show', $objekt) }}">{{ $objekt->objektnummer }}</a></td>
-                                    <td>{{ $objekt->titel ?? '–' }}</td>
+                                    <td>{{ $objekt->interne_bezeichnung ?: ($objekt->titel ?? '–') }}</td>
                                     <td><span class="badge {{ $objekt->status->badgeClass() }}">{{ $objekt->status->label() }}</span></td>
                                     <td>
                                         @if ($objekt->flowfactLink)

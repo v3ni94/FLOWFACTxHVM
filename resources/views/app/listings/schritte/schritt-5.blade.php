@@ -1,109 +1,138 @@
 @extends('layouts.app')
 
-@section('title', 'Bilder')
+@section('title', 'Ausstattung und Energieausweis')
 
 @section('content')
+    @php
+        $barriereSchluessel = array_values(array_intersect(['stufenlos', 'barrierearm', 'rollstuhlgeeignet'], $merkmalSchluessel));
+        $sonstigeSchluessel = array_values(array_diff($merkmalSchluessel, $barriereSchluessel));
+        $energy = $listing->energy;
+        $statusWert = old('energieausweis_status', $energy?->status?->normalisiert()->value);
+        $einbaukuecheSichtbar = $listing->merkmal('einbaukueche')->value === 'ja' && $listing->istMiete();
+    @endphp
+
     @include('app.listings.schritte._header')
 
-    @if ($errors->has('dateien'))
-        <div class="alert alert-error">
-            <ul>
-                @foreach ($errors->get('dateien') as $fehler)
-                    <li>{{ $fehler }}</li>
-                @endforeach
-            </ul>
-        </div>
-    @endif
-
     <div class="card">
-        <div class="card-title">Datei hochladen</div>
         <div class="card-body">
-            <form method="POST" action="{{ route('app.listings.media.store', $listing) }}" enctype="multipart/form-data" class="stack">
+            <form
+                method="POST"
+                action="{{ route('app.listings.step.store', ['listing' => $listing, 'schritt' => 5]) }}"
+                data-autosave="{{ route('app.listings.step.autosave', ['listing' => $listing, 'schritt' => 5]) }}"
+                class="stack"
+            >
                 @csrf
 
-                <div class="field">
-                    <label for="typ">Art</label>
-                    <select id="typ" name="typ">
-                        @foreach (\App\Enums\MediaTyp::options() as $value => $label)
-                            <option value="{{ $value }}">{{ $label }}</option>
+                @if ($sonstigeSchluessel !== [])
+                    <div class="stack">
+                        <p class="eyebrow">Ausstattung</p>
+                        @foreach ($sonstigeSchluessel as $schluessel)
+                            <x-flow.dreiwert
+                                :name="'merkmal_'.$schluessel"
+                                :value="old('merkmal_'.$schluessel, $listing->merkmal($schluessel)->value)"
+                                :label="\App\Domain\Listing\Merkmale::label($schluessel)"
+                            />
                         @endforeach
-                    </select>
+                    </div>
+                @endif
+
+                @if ($einbaukuecheSichtbar)
+                    <label class="field-inline">
+                        <input type="hidden" name="einbaukueche_mitvermietet" value="0">
+                        <input type="checkbox" name="einbaukueche_mitvermietet" value="1" @checked($listing->einbaukueche_mitvermietet)>
+                        <span>Einbauküche wird mitvermietet</span>
+                    </label>
+                @endif
+
+                <div class="grid grid-2">
+                    <x-flow.feld
+                        name="stellplatz_typ"
+                        label="Stellplatztyp"
+                        type="select"
+                        :value="$listing->stellplatz_typ?->value"
+                        :options="['' => '– Bitte wählen –'] + \App\Enums\StellplatzTyp::options()"
+                    />
+                    <x-flow.feld name="stellplatz_anzahl" label="Anzahl Stellplätze" type="number" min="0" max="99" :value="$listing->stellplatz_anzahl" />
                 </div>
 
-                <div class="dropzone">
-                    <input type="file" name="dateien[]" multiple>
-                    <p class="hint">Erlaubt: JPEG, PNG, WEBP, PDF. Maximal 15 MB je Datei, insgesamt 40 Dateien je Objekt.</p>
-                </div>
+                @if ($barriereSchluessel !== [])
+                    <div class="stack">
+                        <p class="eyebrow">Barrierefreiheit</p>
+                        <p class="hint">Ein Aufzug allein bedeutet nicht barrierefrei. Bitte die folgenden Merkmale einzeln angeben.</p>
+                        @foreach ($barriereSchluessel as $schluessel)
+                            <x-flow.dreiwert
+                                :name="'merkmal_'.$schluessel"
+                                :value="old('merkmal_'.$schluessel, $listing->merkmal($schluessel)->value)"
+                                :label="\App\Domain\Listing\Merkmale::label($schluessel)"
+                            />
+                        @endforeach
+                    </div>
+                @endif
 
-                <div class="cluster">
-                    <button type="submit" class="btn btn-primary">Hochladen</button>
-                </div>
+                @if ($energieausweisRelevant)
+                    <div class="stack">
+                        <p class="eyebrow">Energieausweis</p>
+
+                        <div class="kachel-grid">
+                            @foreach (\App\Enums\EnergieausweisStatus::options() as $wert => $label)
+                                <x-flow.kachel
+                                    name="energieausweis_status"
+                                    :value="$wert"
+                                    :label="$label"
+                                    :checked="$statusWert === $wert"
+                                    :reveals="$wert === 'vorhanden' ? '#energieausweis-details' : null"
+                                />
+                            @endforeach
+                        </div>
+
+                        <div class="alert alert-info">
+                            <ul>
+                                @foreach ($energieregeln as $regel)
+                                    <li>{{ $regel }}</li>
+                                @endforeach
+                            </ul>
+                        </div>
+
+                        <div id="energieausweis-details" class="stack" @if ($statusWert !== 'vorhanden') hidden @endif>
+                            <div class="grid grid-2">
+                                <x-flow.feld name="ausweistyp" label="Ausweisart" type="select" :value="$energy?->ausweistyp?->value" :options="['' => '– Bitte wählen –'] + \App\Enums\Ausweistyp::options()" />
+                                <x-flow.feld name="effizienzklasse" label="Effizienzklasse" type="select" :value="$energy?->effizienzklasse?->value" :options="['' => '– Bitte wählen –'] + \App\Enums\Effizienzklasse::options()" />
+                            </div>
+                            <div class="grid grid-2">
+                                <x-flow.feld name="ausstellungsdatum" label="Ausstellungsdatum" type="date" :value="optional($energy?->ausstellungsdatum)->format('Y-m-d')" />
+                                <x-flow.feld name="gueltig_bis" label="Gültig bis" type="date" :value="optional($energy?->gueltig_bis)->format('Y-m-d')" />
+                            </div>
+                            <div class="grid grid-2">
+                                <x-flow.feld name="kennwert_kwh" label="Energiekennwert (kWh/m²a)" type="number" step="0.1" min="0" :value="$energy?->kennwert_kwh" />
+                                @if ($listing->objektart->value === 'gewerbe')
+                                    <x-flow.feld name="kennwert_strom_kwh" label="Kennwert Strom (kWh/m²a)" type="number" step="0.1" min="0" :value="$energy?->kennwert_strom_kwh" />
+                                @endif
+                            </div>
+                            @if ($listing->objektart->istWohnobjekt())
+                                <x-flow.feld name="baujahr_anlage" label="Baujahr laut Ausweis" type="number" min="1800" :max="now()->year + 3" :value="$energy?->baujahr_anlage" />
+                            @endif
+                            <label class="field-inline">
+                                <input type="hidden" name="enthaelt_warmwasser" value="0">
+                                <input type="checkbox" name="enthaelt_warmwasser" value="1" @checked($energy?->enthaelt_warmwasser)>
+                                <span>Kennwert enthält Warmwasser</span>
+                            </label>
+                        </div>
+
+                        @if ($statusWert === 'ausnahme_zu_pruefen')
+                            <x-flow.feld
+                                name="ausnahme_begruendung"
+                                label="Begründung der Ausnahme"
+                                type="textarea"
+                                rows="3"
+                                :value="$energy?->ausnahme_begruendung"
+                                hint="Die Bestätigung durch einen Administrator erfolgt auf der Seite Prüfen und veröffentlichen."
+                            />
+                        @endif
+                    </div>
+                @endif
+
+                @include('app.listings.schritte._speichern')
             </form>
         </div>
-    </div>
-
-    <div class="card">
-        <div class="card-title">Hochgeladene Dateien</div>
-        <div class="card-body">
-            @if ($listing->media->isEmpty())
-                <div class="empty-state">Es wurden noch keine Dateien hochgeladen.</div>
-            @else
-                <form method="POST" action="{{ route('app.listings.media.sort', $listing) }}">
-                    @csrf
-
-                    <div class="thumb-grid" data-sortable>
-                        @foreach ($listing->media as $medium)
-                            <div class="thumb">
-                                @if (in_array($medium->mime, ['image/jpeg', 'image/png', 'image/webp'], true))
-                                    <img src="{{ URL::temporarySignedRoute('app.media.show', now()->addMinutes(30), ['media' => $medium->id, 'variante' => 'vorschau']) }}" alt="{{ $medium->titel ?? $medium->dateiname_original }}">
-                                @endif
-                                <input type="hidden" name="reihenfolge[{{ $medium->id }}]" value="{{ $loop->index }}" data-order-input>
-                                <div class="thumb-actions">
-                                    <span class="badge badge-neutral">{{ $medium->typ->label() }}</span>
-                                    <span class="cluster">
-                                        <button type="button" class="btn btn-ghost btn-sm" data-move-up aria-label="Nach oben">↑</button>
-                                        <button type="button" class="btn btn-ghost btn-sm" data-move-down aria-label="Nach unten">↓</button>
-                                    </span>
-                                </div>
-                            </div>
-                        @endforeach
-                    </div>
-
-                    <div class="cluster">
-                        <button type="submit" class="btn btn-secondary btn-sm">Reihenfolge speichern</button>
-                    </div>
-                </form>
-
-                <div class="stack">
-                    @foreach ($listing->media as $medium)
-                        <div class="status-row">
-                            <span>{{ $medium->dateiname_original }}</span>
-
-                            <form method="POST" action="{{ route('app.listings.media.update', ['listing' => $listing, 'media' => $medium]) }}" class="cluster">
-                                @csrf
-                                <input type="text" name="titel" value="{{ $medium->titel }}" placeholder="Titel">
-                                <input type="hidden" name="im_inserat" value="0">
-                                <label class="field-inline">
-                                    <input type="checkbox" name="im_inserat" value="1" @checked($medium->im_inserat)>
-                                    <span>Im Inserat</span>
-                                </label>
-                                <button type="submit" class="btn btn-secondary btn-sm">Speichern</button>
-                            </form>
-
-                            <form method="POST" action="{{ route('app.listings.media.destroy', ['listing' => $listing, 'media' => $medium]) }}" data-confirm="Diese Datei wirklich löschen?">
-                                @csrf
-                                @method('DELETE')
-                                <button type="submit" class="btn btn-danger btn-sm">Löschen</button>
-                            </form>
-                        </div>
-                    @endforeach
-                </div>
-            @endif
-        </div>
-    </div>
-
-    <div class="cluster">
-        <a href="{{ route('app.listings.step', ['listing' => $listing, 'schritt' => 4]) }}" class="btn btn-secondary">Zurück</a>
-        <a href="{{ route('app.listings.step', ['listing' => $listing, 'schritt' => 6]) }}" class="btn btn-primary">Weiter</a>
     </div>
 @endsection

@@ -6,11 +6,15 @@ namespace App\Http\Requests\Listing;
 
 use App\Models\Listing;
 use Illuminate\Foundation\Http\FormRequest;
+use Illuminate\Validation\Rule;
 
 /**
- * Schritt 6: Texte (Datenvertrag Abschnitt 2.7 und 5.6).
+ * Dreht ein Bild oder einen Grundriss um 90 Grad (Masterprompt-Abgleich B.1
+ * Schritt 6, B.2). Die Drehung wird nur als Metadatum in listing_media
+ * gespeichert (0, 90, 180, 270); die Pixeldrehung beim Export übernimmt der
+ * Connector (Welle 3).
  */
-class Step6TexteRequest extends FormRequest
+class MediaRotateRequest extends FormRequest
 {
     public function authorize(): bool
     {
@@ -26,11 +30,7 @@ class Step6TexteRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'titel' => ['nullable', 'string', 'max:100'],
-            'beschreibung_objekt' => ['nullable', 'string', 'max:8000'],
-            'beschreibung_ausstattung' => ['nullable', 'string', 'max:8000'],
-            'beschreibung_lage' => ['nullable', 'string', 'max:8000'],
-            'beschreibung_sonstiges' => ['nullable', 'string', 'max:8000'],
+            'richtung' => ['sometimes', Rule::in(['links', 'rechts'])],
         ];
     }
 }

@@ -7,6 +7,7 @@ namespace App\Http\Controllers\App;
 use App\Domain\Listing\ListingChangeTracker;
 use App\Enums\MediaTyp;
 use App\Http\Controllers\Controller;
+use App\Http\Requests\Listing\MediaRotateRequest;
 use App\Http\Requests\Listing\MediaSortRequest;
 use App\Http\Requests\Listing\MediaStoreRequest;
 use App\Http\Requests\Listing\MediaUpdateRequest;
@@ -16,6 +17,7 @@ use App\Services\Media\MediaUploadException;
 use App\Services\Media\MediaUploadService;
 use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
 use Illuminate\Http\RedirectResponse;
+use Illuminate\Http\UploadedFile;
 
 /**
  * Bild-, Grundriss- und Dokumentenverwaltung in Schritt 5 (Datenvertrag
@@ -25,6 +27,16 @@ class ListingMediaController extends Controller
 {
     use AuthorizesRequests;
 
+    /**
+     * HEIC/HEIF-Dateien (Endung, weil viele iPhone-Kameras die Datei ohne
+     * verlässlichen MIME-Typ ausliefern) erhalten einen eigenen Hinweis statt
+     * der allgemeinen Fehlermeldung "nicht unterstützter Dateityp"
+     * (Masterprompt-Abgleich B.1 Schritt 6).
+     *
+     * @var list<string>
+     */
+    private const array HEIC_ENDUNGEN = ['heic', 'heif'];
+
     public function store(MediaStoreRequest $request, Listing $listing, MediaUploadService $service): RedirectResponse
     {
         $typ = MediaTyp::from($request->string('typ')->value());
@@ -33,6 +45,16 @@ class ListingMediaController extends Controller
         $erfolge = 0;
 
         foreach ((array) $request->file('dateien', []) as $datei) {
+            if (! $datei instanceof UploadedFile) {
+                continue;
+            }
+
+            if ($this->istHeic($datei)) {
+                $fehler[] = 'HEIC wird derzeit nicht unterstützt, bitte als JPEG exportieren.';
+
+                continue;
+            }
+
             try {
                 $service->store($listing, $datei, $typ);
                 $erfolge++;
@@ -90,10 +112,40 @@ class ListingMediaController extends Controller
         $media->update([
             'titel' => $request->filled('titel') ? $request->string('titel')->value() : null,
             'im_inserat' => $request->boolean('im_inserat'),
+            'freigegeben' => $request->boolean('freigegeben'),
         ]);
 
         app(ListingChangeTracker::class)->recordChange($listing);
 
         return back()->with('status', 'Das Medium wurde aktualisiert.');
+    }
+
+    /**
+     * Dreht die Vorschau um 90 Grad (Masterprompt-Abgleich B.1 Schritt 6).
+     * Standardrichtung ist im Uhrzeigersinn (+90); "links" dreht entgegen.
+     */
+    public function rotate(MediaRotateRequest $request, Listing $listing, ListingMedia $media, MediaUploadService $service): RedirectResponse
+    {
+        abort_unless($media->listing_id === $listing->id, 404);
+
+        $vorzeichen = $request->string('richtung')->value() === 'links' ? -90 : 90;
+        $service->rotate($media, $vorzeichen);
+
+        app(ListingChangeTracker::class)->recordChange($listing);
+
+        return back()->with('status', 'Das Medium wurde gedreht.');
+    }
+
+    private function istHeic(UploadedFile $datei): bool
+    {
+        $endung = strtolower($datei->getClientOriginalExtension());
+
+        if (in_array($endung, self::HEIC_ENDUNGEN, true)) {
+            return true;
+        }
+
+        $mime = strtolower((string) $datei->getMimeType());
+
+        return str_contains($mime, 'heic') || str_contains($mime, 'heif');
     }
 }

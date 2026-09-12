@@ -1,134 +1,169 @@
 @extends('layouts.app')
 
-@section('title', 'Preise')
+@section('title', 'Preise und Heizung')
 
 @section('content')
+    @php
+        $preis = $listing->price;
+        $euro = fn (?int $cent) => $cent === null ? '' : \App\Support\Money::formatPlain($cent);
+        $kautionHinweisObjektarten = ['wohnung', 'haus', 'mehrfamilienhaus'];
+    @endphp
+
     @include('app.listings.schritte._header')
 
-    @php $preis = $listing->price; @endphp
+    <div class="grid grid-2" @if ($listing->istMiete()) data-warmmiete @endif>
+        <div class="card">
+            <div class="card-body">
+                <form
+                    method="POST"
+                    action="{{ route('app.listings.step.store', ['listing' => $listing, 'schritt' => 4]) }}"
+                    data-autosave="{{ route('app.listings.step.autosave', ['listing' => $listing, 'schritt' => 4]) }}"
+                    class="stack"
+                >
+                    @csrf
 
-    @if ($warmmieteVorschau)
-        <div class="alert alert-info">
-            Aktuelle Warmmiete: <strong>{{ \App\Support\Money::format($warmmieteVorschau['warmmieteCent']) }}</strong>
-            @foreach ($warmmieteVorschau['hinweise'] as $hinweis)
-                <br>{{ $hinweis }}
-            @endforeach
-        </div>
-    @endif
+                    @if ($listing->istMiete())
+                        <div class="grid grid-2">
+                            <x-flow.feld name="kaltmiete" label="Kaltmiete" :value="old('kaltmiete', $euro($preis?->kaltmiete_cent))" placeholder="0,00" />
+                            <x-flow.feld name="nebenkosten" label="Nebenkosten (Betriebskosten)" :value="old('nebenkosten', $euro($preis?->nebenkosten_cent))" placeholder="0,00" />
+                        </div>
 
-    <div class="card">
-        <div class="card-body">
-            <form method="POST" action="{{ route('app.listings.step.store', ['listing' => $listing, 'schritt' => 4]) }}" class="stack">
-                @csrf
-
-                @if ($listing->istMiete())
-                    <div data-warmmiete>
-                        <div class="grid grid-3">
-                            <div class="field @error('kaltmiete') has-error @enderror">
-                                <label for="kaltmiete">Kaltmiete</label>
-                                <input type="text" id="kaltmiete" name="kaltmiete" value="{{ old('kaltmiete', $preis?->kaltmiete_cent !== null ? \App\Support\Money::formatPlain($preis->kaltmiete_cent) : '') }}" placeholder="0,00">
-                                @error('kaltmiete')<p class="error">{{ $message }}</p>@enderror
-                            </div>
-
-                            <div class="field @error('nebenkosten') has-error @enderror">
-                                <label for="nebenkosten">Nebenkosten</label>
-                                <input type="text" id="nebenkosten" name="nebenkosten" value="{{ old('nebenkosten', $preis?->nebenkosten_cent !== null ? \App\Support\Money::formatPlain($preis->nebenkosten_cent) : '') }}" placeholder="0,00">
-                                @error('nebenkosten')<p class="error">{{ $message }}</p>@enderror
-                            </div>
-
-                            <div class="field @error('heizkosten') has-error @enderror">
-                                <label for="heizkosten">Heizkosten</label>
-                                <input type="text" id="heizkosten" name="heizkosten" value="{{ old('heizkosten', $preis?->heizkosten_cent !== null ? \App\Support\Money::formatPlain($preis->heizkosten_cent) : '') }}" placeholder="0,00">
-                                @error('heizkosten')<p class="error">{{ $message }}</p>@enderror
+                        <div class="stack">
+                            <p class="eyebrow">Heizkosten</p>
+                            <div class="kachel-grid">
+                                <x-flow.kachel
+                                    name="heizkosten_struktur"
+                                    value="enthalten"
+                                    label="In den Nebenkosten enthalten"
+                                    :checked="old('heizkosten_struktur', $struktur?->value) === 'enthalten'"
+                                    reveals="#heizkosten-betrag-feld"
+                                />
+                                <x-flow.kachel
+                                    name="heizkosten_struktur"
+                                    value="zusaetzlich"
+                                    label="Zusätzlich an den Vermieter"
+                                    :checked="old('heizkosten_struktur', $struktur?->value) === 'zusaetzlich'"
+                                    reveals="#heizkosten-betrag-feld"
+                                />
+                                <x-flow.kachel
+                                    name="heizkosten_struktur"
+                                    value="eigener_vertrag"
+                                    label="Mieter schließt eigenen Versorgungsvertrag"
+                                    :checked="old('heizkosten_struktur', $struktur?->value) === 'eigener_vertrag'"
+                                />
                             </div>
                         </div>
 
-                        <div class="checkbox-group">
-                            <input type="hidden" name="heizkosten_in_nebenkosten_enthalten" value="0">
-                            <label class="field-inline">
-                                <input type="checkbox" name="heizkosten_in_nebenkosten_enthalten" value="1" @checked(old('heizkosten_in_nebenkosten_enthalten', $preis?->heizkosten_in_nebenkosten_enthalten))>
-                                <span>Heizkosten sind bereits in den Nebenkosten enthalten</span>
-                            </label>
+                        <div id="heizkosten-betrag-feld" @if (($struktur?->value ?? 'zusaetzlich') === 'eigener_vertrag') hidden @endif>
+                            <x-flow.feld name="heizkosten" label="Heizkosten" :value="old('heizkosten', $euro($preis?->heizkosten_cent))" placeholder="0,00" />
                         </div>
 
-                        <div class="field @error('heizkosten_versorgung') has-error @enderror">
-                            <label for="heizkosten_versorgung">Heizkostenversorgung</label>
-                            <select id="heizkosten_versorgung" name="heizkosten_versorgung" required>
-                                <option value="">Bitte wählen</option>
-                                @foreach (\App\Enums\HeizkostenVersorgung::options() as $value => $label)
-                                    <option value="{{ $value }}" @selected(old('heizkosten_versorgung', $listing->heizkosten_versorgung?->value) === $value)>{{ $label }}</option>
+                        <x-flow.feld
+                            name="kaution"
+                            label="Kaution"
+                            :value="old('kaution', $euro($preis?->kaution_cent))"
+                            placeholder="0,00"
+                            :hint="in_array($listing->objektart->value, $kautionHinweisObjektarten, true) ? 'Bei Wohnraum höchstens drei Nettokaltmieten, gesetzliche Regelung zu prüfen.' : null"
+                        />
+
+                        <div class="stack">
+                            <p class="eyebrow">Stellplatz</p>
+                            <div class="kachel-grid">
+                                @foreach (\App\Enums\StellplatzModus::options() as $wert => $label)
+                                    <x-flow.kachel
+                                        name="stellplatz_modus"
+                                        :value="$wert"
+                                        :label="$label"
+                                        :checked="old('stellplatz_modus', $preis?->stellplatz_modus?->value ?? 'keiner') === $wert"
+                                        :reveals="in_array($wert, ['optional', 'pflicht_zusaetzlich'], true) ? '#stellplatz-miete-feld' : null"
+                                    />
                                 @endforeach
-                            </select>
-                            @error('heizkosten_versorgung')<p class="error">{{ $message }}</p>@enderror
+                            </div>
                         </div>
 
-                        <p class="hint">Vorschau (wird beim Speichern serverseitig neu berechnet): <span data-warmmiete-output>–</span></p>
-                        <p class="hint" data-warmmiete-hinweis hidden></p>
+                        <div id="stellplatz-miete-feld" @if (! in_array($preis?->stellplatz_modus?->value, ['optional', 'pflicht_zusaetzlich'], true)) hidden @endif>
+                            <x-flow.feld name="stellplatz_miete" label="Stellplatzmiete" :value="old('stellplatz_miete', $euro($preis?->stellplatz_miete_cent))" placeholder="0,00" />
+                        </div>
+                    @else
+                        <x-flow.feld name="kaufpreis" label="Kaufpreis" :value="old('kaufpreis', $euro($preis?->kaufpreis_cent))" placeholder="0,00" />
+
+                        @if ($listing->objektart->value === 'wohnung')
+                            <x-flow.feld name="hausgeld" label="Hausgeld" :value="old('hausgeld', $euro($preis?->hausgeld_cent))" placeholder="0,00" />
+                        @endif
+
+                        @if ($listing->nutzungsstatus->value === 'vermietet')
+                            <x-flow.feld name="mieteinnahmen_ist" label="Ist-Mieteinnahmen (Jahresbetrag)" :value="old('mieteinnahmen_ist', $euro($preis?->mieteinnahmen_ist_cent))" placeholder="0,00" />
+                        @endif
+
+                        <div class="stack">
+                            <p class="eyebrow">Stellplatz</p>
+                            <div class="kachel-grid">
+                                <x-flow.kachel name="stellplatz_modus" value="keiner" label="Kein Stellplatz" :checked="old('stellplatz_modus', $preis?->stellplatz_modus?->value ?? 'keiner') === 'keiner'" />
+                                <x-flow.kachel name="stellplatz_modus" value="pflicht_enthalten" label="Im Kaufpreis enthalten" :checked="old('stellplatz_modus', $preis?->stellplatz_modus?->value) === 'pflicht_enthalten'" />
+                                <x-flow.kachel name="stellplatz_modus" value="pflicht_zusaetzlich" label="Zusätzlich zum Kaufpreis" :checked="old('stellplatz_modus', $preis?->stellplatz_modus?->value) === 'pflicht_zusaetzlich'" reveals="#stellplatz-kaufpreis-feld" />
+                            </div>
+                        </div>
+
+                        <div id="stellplatz-kaufpreis-feld" @if ($preis?->stellplatz_modus?->value !== 'pflicht_zusaetzlich') hidden @endif>
+                            <x-flow.feld name="stellplatz_kaufpreis" label="Stellplatzkaufpreis" :value="old('stellplatz_kaufpreis', $euro($preis?->stellplatz_kaufpreis_cent))" placeholder="0,00" />
+                        </div>
+
+                        <x-flow.feld
+                            name="heizkosten_versorgung"
+                            label="Heizkostenversorgung"
+                            type="select"
+                            :value="$listing->heizkosten_versorgung?->value"
+                            :options="\App\Enums\HeizkostenVersorgung::options()"
+                        />
+                    @endif
+
+                    <div class="stack">
+                        <p class="eyebrow">Provision</p>
+                        <div class="grid grid-2">
+                            <x-flow.feld name="provision_typ" label="Provisionsart" type="select" :value="$preis?->provision_typ?->value ?? 'provisionsfrei'" :options="\App\Enums\ProvisionTyp::options()" />
+                            <x-flow.feld name="provision_text" label="Provisionstext" :value="$preis?->provision_text" placeholder="z. B. 3,57 % inkl. MwSt." />
+                        </div>
+                        <label class="field-inline">
+                            <input type="checkbox" name="provision_bestaetigt" value="1" @checked($preis?->provision_bestaetigt)>
+                            <span>Provisionsangabe geprüft und bestätigt</span>
+                        </label>
                     </div>
 
-                    <div class="grid grid-2">
-                        <div class="field @error('kaution') has-error @enderror">
-                            <label for="kaution">Kaution</label>
-                            <input type="text" id="kaution" name="kaution" value="{{ old('kaution', $preis?->kaution_cent !== null ? \App\Support\Money::formatPlain($preis->kaution_cent) : '') }}" placeholder="0,00">
-                            @error('kaution')<p class="error">{{ $message }}</p>@enderror
-                        </div>
-
-                        <div class="field @error('stellplatz_miete') has-error @enderror">
-                            <label for="stellplatz_miete">Stellplatzmiete</label>
-                            <input type="text" id="stellplatz_miete" name="stellplatz_miete" value="{{ old('stellplatz_miete', $preis?->stellplatz_miete_cent !== null ? \App\Support\Money::formatPlain($preis->stellplatz_miete_cent) : '') }}" placeholder="0,00">
-                            @error('stellplatz_miete')<p class="error">{{ $message }}</p>@enderror
-                        </div>
-                    </div>
-                @else
-                    <div class="grid grid-2">
-                        <div class="field @error('kaufpreis') has-error @enderror">
-                            <label for="kaufpreis">Kaufpreis</label>
-                            <input type="text" id="kaufpreis" name="kaufpreis" value="{{ old('kaufpreis', $preis?->kaufpreis_cent !== null ? \App\Support\Money::formatPlain($preis->kaufpreis_cent) : '') }}" placeholder="0,00">
-                            @error('kaufpreis')<p class="error">{{ $message }}</p>@enderror
-                        </div>
-
-                        <div class="field @error('hausgeld') has-error @enderror">
-                            <label for="hausgeld">Hausgeld</label>
-                            <input type="text" id="hausgeld" name="hausgeld" value="{{ old('hausgeld', $preis?->hausgeld_cent !== null ? \App\Support\Money::formatPlain($preis->hausgeld_cent) : '') }}" placeholder="0,00">
-                            @error('hausgeld')<p class="error">{{ $message }}</p>@enderror
+                    <div class="stack">
+                        <p class="eyebrow">Heizung</p>
+                        <div class="grid grid-2">
+                            <x-flow.feld name="heizungsart" label="Heizungssystem" type="select" :value="$listing->heizungsart?->value" :options="['' => '– Bitte wählen –'] + \App\Enums\Heizungsart::options()" />
+                            <x-flow.feld name="energietraeger" label="Energieträger" type="select" :value="$listing->energietraeger?->value" :options="['' => '– Bitte wählen –'] + \App\Enums\Energietraeger::options()" />
+                            <x-flow.feld name="heizung_waermeabgabe" label="Wärmeabgabe" type="select" :value="$listing->heizung_waermeabgabe?->value" :options="\App\Enums\Waermeabgabe::options()" />
+                            <x-flow.feld name="heizung_warmwasser" label="Warmwasserbereitung" type="select" :value="$listing->heizung_warmwasser?->value" :options="\App\Enums\Warmwasserbereitung::options()" />
                         </div>
                     </div>
 
-                    <div class="grid grid-2">
-                        <div class="field @error('stellplatz_kaufpreis') has-error @enderror">
-                            <label for="stellplatz_kaufpreis">Stellplatz Kaufpreis</label>
-                            <input type="text" id="stellplatz_kaufpreis" name="stellplatz_kaufpreis" value="{{ old('stellplatz_kaufpreis', $preis?->stellplatz_kaufpreis_cent !== null ? \App\Support\Money::formatPlain($preis->stellplatz_kaufpreis_cent) : '') }}" placeholder="0,00">
-                            @error('stellplatz_kaufpreis')<p class="error">{{ $message }}</p>@enderror
-                        </div>
-
-                        <div class="field @error('mieteinnahmen_ist') has-error @enderror">
-                            <label for="mieteinnahmen_ist">Ist-Mieteinnahmen (Jahr)</label>
-                            <input type="text" id="mieteinnahmen_ist" name="mieteinnahmen_ist" value="{{ old('mieteinnahmen_ist', $preis?->mieteinnahmen_ist_cent !== null ? \App\Support\Money::formatPlain($preis->mieteinnahmen_ist_cent) : '') }}" placeholder="0,00">
-                            @error('mieteinnahmen_ist')<p class="error">{{ $message }}</p>@enderror
-                        </div>
-                    </div>
-                @endif
-
-                <div class="grid grid-2">
-                    <div class="field @error('provision_typ') has-error @enderror">
-                        <label for="provision_typ">Provision</label>
-                        <select id="provision_typ" name="provision_typ" required>
-                            @foreach (\App\Enums\ProvisionTyp::options() as $value => $label)
-                                <option value="{{ $value }}" @selected(old('provision_typ', $preis?->provision_typ?->value) === $value)>{{ $label }}</option>
-                            @endforeach
-                        </select>
-                        @error('provision_typ')<p class="error">{{ $message }}</p>@enderror
-                    </div>
-
-                    <div class="field @error('provision_text') has-error @enderror">
-                        <label for="provision_text">Provisionstext</label>
-                        <input type="text" id="provision_text" name="provision_text" value="{{ old('provision_text', $preis?->provision_text) }}" placeholder="z. B. 3,57 % inkl. MwSt.">
-                        @error('provision_text')<p class="error">{{ $message }}</p>@enderror
-                    </div>
-                </div>
-
-                @include('app.listings.schritte._speichern')
-            </form>
+                    @include('app.listings.schritte._speichern')
+                </form>
+            </div>
         </div>
+
+        @if ($listing->istMiete())
+            <div class="card card-canvas">
+                <div class="card-title">Zusammenfassung</div>
+                <div class="card-body">
+                    <dl class="kv">
+                        <dt>Kaltmiete</dt>
+                        <dd>{{ \App\Support\Money::format($preis?->kaltmiete_cent ?? 0) }}</dd>
+                        <dt>Betriebskosten</dt>
+                        <dd>{{ \App\Support\Money::format($preis?->nebenkosten_cent ?? 0) }}</dd>
+                        <dt>Heizkosten</dt>
+                        <dd>{{ $preis?->heizkosten_cent !== null ? \App\Support\Money::format($preis->heizkosten_cent) : '– siehe Hinweis –' }}</dd>
+                        <dt>Gesamt an Vermieter</dt>
+                        <dd data-warmmiete-output>{{ \App\Support\Money::format($preis?->warmmiete_cent ?? 0) }}</dd>
+                    </dl>
+                    <p class="hint" data-warmmiete-hinweis>{{ $struktur?->value === 'eigener_vertrag' ? 'Miete einschließlich Betriebskosten, zuzüglich separat zu zahlender Heizkosten.' : '' }}</p>
+                    <p class="hint" data-warmmiete-stellplatz @if (! in_array($preis?->stellplatz_modus?->value, ['optional', 'pflicht_zusaetzlich'], true)) hidden @endif>
+                        Stellplatz zusätzlich: <span data-warmmiete-stellplatz-output>{{ \App\Support\Money::format($preis?->stellplatz_miete_cent ?? 0) }}</span>
+                    </p>
+                </div>
+            </div>
+        @endif
     </div>
 @endsection

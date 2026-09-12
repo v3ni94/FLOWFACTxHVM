@@ -1,5 +1,10 @@
 @php
     $wizardSteps = \App\Http\Controllers\App\Support\WizardSteps::TITEL;
+    $befunde = app(\App\Domain\Listing\CompletenessCheck::class)->befunde($listing);
+    $schritteMitBefund = collect($befunde)
+        ->filter(fn ($befund) => $befund->istBlockierend())
+        ->pluck('schritt')
+        ->unique();
 @endphp
 
 <div class="page-header">
@@ -9,13 +14,21 @@
     </div>
 </div>
 
-<ul class="stepper">
-    @foreach ($wizardSteps as $nummer => $titel)
-        <li data-step="{{ $nummer }}" class="{{ $nummer === $schritt ? 'is-current' : ($nummer < $schritt ? 'is-done' : '') }}">
-            <a href="{{ route('app.listings.step', ['listing' => $listing, 'schritt' => $nummer]) }}">{{ $titel }}</a>
+<div class="table-wrap">
+    <ul class="stepper">
+        @foreach ($wizardSteps as $nummer => $titel)
+            <li
+                data-step="{{ $nummer }}"
+                class="{{ $nummer === $schritt ? 'is-current' : ($nummer < $schritt ? 'is-done' : '') }} {{ $schritteMitBefund->contains($nummer) ? 'has-issues' : '' }}"
+            >
+                <a href="{{ route('app.listings.step', ['listing' => $listing, 'schritt' => $nummer]) }}">{{ $titel }}</a>
+            </li>
+        @endforeach
+        <li class="{{ $schritteMitBefund->isEmpty() ? '' : 'has-issues' }}">
+            <a href="{{ route('app.listings.review', ['listing' => $listing]) }}">Prüfen</a>
         </li>
-    @endforeach
-</ul>
+    </ul>
+</div>
 
 @if (! $vollstaendigkeit->istVollstaendig())
     <div class="alert alert-info">

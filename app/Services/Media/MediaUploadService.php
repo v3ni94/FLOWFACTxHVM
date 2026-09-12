@@ -183,6 +183,20 @@ final class MediaUploadService
         $media->delete();
     }
 
+    /**
+     * Dreht die Vorschau eines Mediums um 90 Grad (Masterprompt-Abgleich B.1
+     * Schritt 6, B.2). Nur ein Metadatum (0, 90, 180, 270); die Pixeldaten
+     * selbst bleiben unverändert, die Vorschau dreht sich über die CSS-Klasse
+     * .rot-90 usw. (docs/ui-klassen.md). Die Pixeldrehung beim Export in
+     * FLOWFACT übernimmt der Connector.
+     */
+    public function rotate(ListingMedia $media, int $gradVorzeichen): void
+    {
+        $neu = (($media->rotation + $gradVorzeichen) % 360 + 360) % 360;
+
+        $media->update(['rotation' => $neu]);
+    }
+
     public function vorschauPfad(ListingMedia $media): ?string
     {
         if (! in_array($media->mime, self::BILD_MIMES, true)) {

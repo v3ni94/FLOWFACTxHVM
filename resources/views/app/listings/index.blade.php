@@ -5,103 +5,113 @@
 @section('content')
     <div class="page-header">
         <h1>Objekte</h1>
-    </div>
-
-    <div class="card">
-        <div class="card-title">Neues Objekt anlegen</div>
-        <div class="card-body">
-            <form method="POST" action="{{ route('app.listings.create') }}" class="cluster">
-                @csrf
-
-                <div class="field @error('vermarktungsart') has-error @enderror">
-                    <label for="neu-vermarktungsart">Vermarktungsart</label>
-                    <select id="neu-vermarktungsart" name="vermarktungsart" required>
-                        @foreach (\App\Enums\Vermarktungsart::options() as $value => $label)
-                            <option value="{{ $value }}" @selected(old('vermarktungsart') === $value)>{{ $label }}</option>
+        <div class="page-actions">
+            @can('create', \App\Models\Listing::class)
+                <form method="POST" action="{{ route('app.listings.create') }}" class="cluster">
+                    @csrf
+                    <select name="vermarktungsart">
+                        @foreach ($vermarktungsartOptionen as $wert => $label)
+                            <option value="{{ $wert }}">{{ $label }}</option>
                         @endforeach
                     </select>
-                    @error('vermarktungsart')
-                        <p class="error">{{ $message }}</p>
-                    @enderror
-                </div>
-
-                <div class="field @error('objektart') has-error @enderror">
-                    <label for="neu-objektart">Objektart</label>
-                    <select id="neu-objektart" name="objektart" required>
-                        @foreach ($objektartOptionen as $value => $label)
-                            <option value="{{ $value }}" @selected(old('objektart') === $value)>{{ $label }}</option>
+                    <select name="objektart">
+                        @foreach ($objektartOptionen as $wert => $label)
+                            <option value="{{ $wert }}">{{ $label }}</option>
                         @endforeach
                     </select>
-                    @error('objektart')
-                        <p class="error">{{ $message }}</p>
-                    @enderror
-                </div>
-
-                <div class="field">
-                    <label>&nbsp;</label>
-                    <button type="submit" class="btn btn-primary">Entwurf anlegen</button>
-                </div>
-            </form>
+                    <button type="submit" class="btn btn-primary">Neues Objekt</button>
+                </form>
+            @endcan
         </div>
     </div>
 
-    <div class="card">
-        <div class="card-body">
-            <form method="GET" action="{{ route('app.listings.index') }}" class="cluster">
-                <div class="field">
-                    <label for="filter-status">Bearbeitungsstatus</label>
-                    <select id="filter-status" name="status" data-autosubmit>
-                        <option value="">Alle</option>
-                        @foreach ($statusOptionen as $value => $label)
-                            <option value="{{ $value }}" @selected($filter['status'] === $value)>{{ $label }}</option>
-                        @endforeach
-                    </select>
-                </div>
-
-                <div class="field">
-                    <label for="filter-vermarktungsart">Vermarktungsart</label>
-                    <select id="filter-vermarktungsart" name="vermarktungsart" data-autosubmit>
-                        <option value="">Alle</option>
-                        @foreach ($vermarktungsartOptionen as $value => $label)
-                            <option value="{{ $value }}" @selected($filter['vermarktungsart'] === $value)>{{ $label }}</option>
-                        @endforeach
-                    </select>
-                </div>
-
-                <div class="field">
-                    <label for="filter-suche">Suche</label>
-                    <input type="search" id="filter-suche" name="suche" value="{{ $filter['suche'] }}" placeholder="Objektnummer, Titel, Ort">
-                </div>
-
-                <div class="field">
-                    <label>&nbsp;</label>
-                    <button type="submit" class="btn btn-secondary">Filtern</button>
-                </div>
-            </form>
+    <form method="GET" action="{{ route('app.listings.index') }}" class="card">
+        <div class="card-body grid grid-3">
+            <div class="field">
+                <label for="suche">Suche</label>
+                <input type="search" id="suche" name="suche" value="{{ $filter['suche'] }}" placeholder="Objektnummer, Titel, Adresse, Ort">
+            </div>
+            <div class="field">
+                <label for="status">Bearbeitungsstatus</label>
+                <select id="status" name="status">
+                    <option value="">Alle</option>
+                    @foreach ($statusOptionen as $wert => $label)
+                        <option value="{{ $wert }}" @selected($filter['status'] === $wert)>{{ $label }}</option>
+                    @endforeach
+                </select>
+            </div>
+            <div class="field">
+                <label for="vermarktungsart">Vermarktungsart</label>
+                <select id="vermarktungsart" name="vermarktungsart">
+                    <option value="">Alle</option>
+                    @foreach ($vermarktungsartOptionen as $wert => $label)
+                        <option value="{{ $wert }}" @selected($filter['vermarktungsart'] === $wert)>{{ $label }}</option>
+                    @endforeach
+                </select>
+            </div>
+            <div class="field">
+                <label for="bearbeiter">Bearbeiter</label>
+                <select id="bearbeiter" name="bearbeiter">
+                    <option value="">Alle</option>
+                    @foreach ($bearbeiterOptionen as $id => $name)
+                        <option value="{{ $id }}" @selected((string) $filter['bearbeiter'] === (string) $id)>{{ $name }}</option>
+                    @endforeach
+                </select>
+            </div>
+            <div class="cluster">
+                <button type="submit" class="btn btn-secondary">Filtern</button>
+                <a href="{{ route('app.listings.index') }}" class="btn btn-ghost">Zurücksetzen</a>
+            </div>
         </div>
-    </div>
+    </form>
 
     <div class="table-wrap">
         <table class="table">
             <thead>
                 <tr>
-                    <th>Objektnummer</th>
-                    <th>Titel</th>
-                    <th>Ort</th>
+                    <th>Bild</th>
+                    <th>Objekt</th>
                     <th>Vermarktungsart</th>
-                    <th>Bearbeitungsstatus</th>
-                    <th>Übertragung</th>
+                    <th>Objektart</th>
+                    <th>Ort</th>
+                    <th>Preis</th>
+                    <th>Bearbeiter</th>
+                    <th>Status</th>
+                    <th>FLOWFACT</th>
                     <th>Portale</th>
-                    <th>Geändert am</th>
+                    <th>Letzte Änderung</th>
                 </tr>
             </thead>
             <tbody>
                 @forelse ($listings as $listing)
+                    @php $titelbild = $listing->media->first(); @endphp
                     <tr>
-                        <td><a href="{{ route('app.listings.show', $listing) }}">{{ $listing->objektnummer }}</a></td>
-                        <td>{{ $listing->titel ?? '–' }}</td>
-                        <td>{{ $listing->ort ?? '–' }}</td>
+                        <td>
+                            @if ($titelbild)
+                                <img src="{{ URL::temporarySignedRoute('app.media.show', now()->addMinutes(30), ['media' => $titelbild->id, 'variante' => 'vorschau']) }}" alt="" class="thumb-sm">
+                            @else
+                                <span class="badge badge-neutral">Kein Bild</span>
+                            @endif
+                        </td>
+                        <td>
+                            <a href="{{ route('app.listings.show', $listing) }}">{{ $listing->interne_bezeichnung ?: ($listing->titel ?: $listing->objektnummer) }}</a>
+                            <p class="hint">{{ $listing->objektnummer }}</p>
+                        </td>
                         <td>{{ $listing->vermarktungsart->label() }}</td>
+                        <td>{{ $listing->objektart->label() }}</td>
+                        <td>{{ $listing->ort }}</td>
+                        <td>
+                            @if ($listing->price)
+                                @if ($listing->istMiete())
+                                    {{ $listing->price->warmmiete_cent !== null ? \App\Support\Money::format($listing->price->warmmiete_cent) : '–' }}
+                                @else
+                                    {{ $listing->price->kaufpreis_cent !== null ? \App\Support\Money::format($listing->price->kaufpreis_cent) : '–' }}
+                                @endif
+                            @else
+                                –
+                            @endif
+                        </td>
+                        <td>{{ $listing->bearbeiter?->name ?? '–' }}</td>
                         <td><span class="badge {{ $listing->status->badgeClass() }}">{{ $listing->status->label() }}</span></td>
                         <td>
                             @if ($listing->flowfactLink)
@@ -114,17 +124,11 @@
                         <td>{{ $listing->updated_at?->format('d.m.Y H:i') }}</td>
                     </tr>
                 @empty
-                    <tr>
-                        <td colspan="8">
-                            <div class="empty-state">Es sind noch keine Objekte angelegt.</div>
-                        </td>
-                    </tr>
+                    <tr><td colspan="10" class="empty-state">Keine Objekte gefunden.</td></tr>
                 @endforelse
             </tbody>
         </table>
     </div>
 
-    <div class="cluster">
-        {{ $listings->links() }}
-    </div>
+    {{ $listings->links() }}
 @endsection

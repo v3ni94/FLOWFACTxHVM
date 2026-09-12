@@ -192,20 +192,30 @@ final class ListingPolicyTest extends TestCase
     }
 
     /**
-     * Ende-zu-Ende-Nachweis, dass die Policy tatsächlich in der bestehenden
-     * Route greift (nicht nur in der isolierten Can-Prüfung oben): Der
-     * Assistent (app/Http/Controllers/App/ListingWizardController, in dieser
-     * Welle unverändert) prüft die Fähigkeit "update" bereits beim Anzeigen
-     * eines Schritts.
+     * Ende-zu-Ende-Nachweis, dass die Policy tatsächlich in der Route greift
+     * (nicht nur in der isolierten Can-Prüfung oben): Der neue Assistent
+     * (App\Http\Controllers\App\Steps\StepDispatcher, Masterprompt-Abgleich
+     * B.1, Welle 2) prüft "view" beim Anzeigen eines Schritts (jeder aktive
+     * Benutzer, auch Leser, darf sehen) und "update" beim Speichern
+     * (Formular-POST) und beim Autosave (PATCH); nur dort ist ein Leser
+     * ausgeschlossen (B.3: "Objekte sehen: alle").
      */
-    public function test_ein_leser_erhaelt_403_beim_aufruf_eines_assistentenschritts(): void
+    public function test_ein_leser_darf_einen_assistentenschritt_ansehen_aber_nicht_speichern(): void
     {
         $leser = User::factory()->create(['role' => UserRole::Leser]);
         $listing = Listing::factory()->create();
 
-        $response = $this->actingAs($leser)->get(route('app.listings.step', ['listing' => $listing, 'schritt' => 1]));
+        $this->actingAs($leser)
+            ->get(route('app.listings.step', ['listing' => $listing, 'schritt' => 1]))
+            ->assertOk();
 
-        $response->assertForbidden();
+        $this->actingAs($leser)
+            ->post(route('app.listings.step.store', ['listing' => $listing, 'schritt' => 1]), ['aktion' => 'speichern'])
+            ->assertForbidden();
+
+        $this->actingAs($leser)
+            ->patchJson(route('app.listings.step.autosave', ['listing' => $listing, 'schritt' => 1]), [])
+            ->assertForbidden();
     }
 
     /**

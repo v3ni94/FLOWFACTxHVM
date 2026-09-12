@@ -1,195 +1,95 @@
 @extends('layouts.app')
 
-@section('title', 'Flächen und Ausstattung')
+@section('title', 'Adresse und Lage')
 
 @section('content')
     @include('app.listings.schritte._header')
 
+    @if ($moeglicheQuellen->isNotEmpty())
+        <div class="card card-canvas">
+            <div class="card-body">
+                <form method="POST" action="{{ route('app.listings.step.store', ['listing' => $listing, 'schritt' => 2]) }}" class="cluster">
+                    @csrf
+                    <input type="hidden" name="aktion" value="uebernehmen">
+                    <div class="field field-grow">
+                        <label for="feld-quelle_listing_id">Gebäudedaten aus vorhandenem Objekt übernehmen</label>
+                        <select id="feld-quelle_listing_id" name="quelle_listing_id">
+                            @foreach ($moeglicheQuellen as $quelle)
+                                <option value="{{ $quelle->id }}">{{ $quelle->objektnummer }} – {{ $quelle->adresseKurz() }}</option>
+                            @endforeach
+                        </select>
+                        <p class="hint">Übernimmt Straße, Hausnummer, PLZ, Ort, Stadtteil, Baujahr, Etagen gesamt und die Heizungsfelder nur in leere Felder dieses Objekts.</p>
+                    </div>
+                    <button type="submit" class="btn btn-secondary" formnovalidate>Übernehmen</button>
+                </form>
+            </div>
+        </div>
+    @endif
+
     <div class="card">
         <div class="card-body">
-            <form method="POST" action="{{ route('app.listings.step.store', ['listing' => $listing, 'schritt' => 2]) }}" class="stack">
+            <form
+                method="POST"
+                action="{{ route('app.listings.step.store', ['listing' => $listing, 'schritt' => 2]) }}"
+                data-autosave="{{ route('app.listings.step.autosave', ['listing' => $listing, 'schritt' => 2]) }}"
+                class="stack"
+            >
                 @csrf
 
+                <x-flow.feld name="strasse" label="Straße" :value="$listing->strasse" />
+
                 <div class="grid grid-3">
-                    @if ($listing->objektart->value !== 'gewerbe')
-                        <div class="field @error('wohnflaeche_qm') has-error @enderror">
-                            <label for="wohnflaeche_qm">Wohnfläche (m²)</label>
-                            <input type="text" id="wohnflaeche_qm" name="wohnflaeche_qm" value="{{ old('wohnflaeche_qm', $listing->wohnflaeche_qm) }}">
-                            @error('wohnflaeche_qm')<p class="error">{{ $message }}</p>@enderror
-                        </div>
-                    @endif
-
-                    @if ($listing->objektart->value === 'gewerbe')
-                        <div class="field @error('nutzflaeche_qm') has-error @enderror">
-                            <label for="nutzflaeche_qm">Nutzfläche (m²)</label>
-                            <input type="text" id="nutzflaeche_qm" name="nutzflaeche_qm" value="{{ old('nutzflaeche_qm', $listing->nutzflaeche_qm) }}">
-                            @error('nutzflaeche_qm')<p class="error">{{ $message }}</p>@enderror
-                        </div>
-                    @endif
-
-                    @if (in_array($listing->objektart->value, ['haus', 'grundstueck'], true))
-                        <div class="field @error('grundstuecksflaeche_qm') has-error @enderror">
-                            <label for="grundstuecksflaeche_qm">Grundstücksfläche (m²)</label>
-                            <input type="text" id="grundstuecksflaeche_qm" name="grundstuecksflaeche_qm" value="{{ old('grundstuecksflaeche_qm', $listing->grundstuecksflaeche_qm) }}">
-                            @error('grundstuecksflaeche_qm')<p class="error">{{ $message }}</p>@enderror
-                        </div>
-                    @endif
-
-                    <div class="field @error('zimmer') has-error @enderror">
-                        <label for="zimmer">Zimmer</label>
-                        <input type="text" id="zimmer" name="zimmer" value="{{ old('zimmer', $listing->zimmer) }}">
-                        @error('zimmer')<p class="error">{{ $message }}</p>@enderror
-                    </div>
+                    <x-flow.feld name="hausnummer" label="Hausnummer" :value="$listing->hausnummer" hint="Freier Text, z. B. 12a oder 12 bis 14." />
+                    <x-flow.feld name="adresszusatz" label="Adresszusatz" :value="$listing->adresszusatz" />
+                    <x-flow.feld name="stadtteil" label="Stadtteil" :value="$listing->stadtteil" />
                 </div>
 
                 <div class="grid grid-3">
-                    <div class="field @error('schlafzimmer') has-error @enderror">
-                        <label for="schlafzimmer">Schlafzimmer</label>
-                        <input type="number" id="schlafzimmer" name="schlafzimmer" value="{{ old('schlafzimmer', $listing->schlafzimmer) }}" min="0">
-                        @error('schlafzimmer')<p class="error">{{ $message }}</p>@enderror
-                    </div>
-
-                    <div class="field @error('badezimmer') has-error @enderror">
-                        <label for="badezimmer">Badezimmer</label>
-                        <input type="number" id="badezimmer" name="badezimmer" value="{{ old('badezimmer', $listing->badezimmer) }}" min="0">
-                        @error('badezimmer')<p class="error">{{ $message }}</p>@enderror
-                    </div>
-
-                    <div class="field @error('baujahr') has-error @enderror">
-                        <label for="baujahr">Baujahr</label>
-                        <input type="number" id="baujahr" name="baujahr" value="{{ old('baujahr', $listing->baujahr) }}">
-                        @error('baujahr')<p class="error">{{ $message }}</p>@enderror
-                    </div>
+                    <x-flow.feld name="plz" label="Postleitzahl" :value="$listing->plz" />
+                    <x-flow.feld name="ort" label="Ort" :value="$listing->ort" />
+                    <x-flow.feld name="land" label="Land" :value="$listing->land ?? $standardLand" maxlength="2" />
                 </div>
 
-                <div class="grid grid-3">
-                    <div class="field @error('etage') has-error @enderror">
-                        <label for="etage">Etage</label>
-                        <input type="number" id="etage" name="etage" value="{{ old('etage', $listing->etage) }}">
-                        @error('etage')<p class="error">{{ $message }}</p>@enderror
-                    </div>
-
-                    <div class="field @error('etagen_gesamt') has-error @enderror">
-                        <label for="etagen_gesamt">Etagen gesamt</label>
-                        <input type="number" id="etagen_gesamt" name="etagen_gesamt" value="{{ old('etagen_gesamt', $listing->etagen_gesamt) }}" min="0">
-                        @error('etagen_gesamt')<p class="error">{{ $message }}</p>@enderror
-                    </div>
-
-                    <div class="field @error('zustand') has-error @enderror">
-                        <label for="zustand">Zustand</label>
-                        <select id="zustand" name="zustand">
-                            <option value="">Bitte wählen</option>
-                            @foreach (\App\Enums\Zustand::options() as $value => $label)
-                                <option value="{{ $value }}" @selected(old('zustand', $listing->zustand?->value) === $value)>{{ $label }}</option>
-                            @endforeach
-                        </select>
-                        @error('zustand')<p class="error">{{ $message }}</p>@enderror
-                    </div>
-                </div>
-
-                <div class="grid grid-3">
-                    <div class="field @error('ausstattungsqualitaet') has-error @enderror">
-                        <label for="ausstattungsqualitaet">Ausstattungsqualität</label>
-                        <select id="ausstattungsqualitaet" name="ausstattungsqualitaet">
-                            <option value="">Bitte wählen</option>
-                            @foreach (\App\Enums\Ausstattungsqualitaet::options() as $value => $label)
-                                <option value="{{ $value }}" @selected(old('ausstattungsqualitaet', $listing->ausstattungsqualitaet?->value) === $value)>{{ $label }}</option>
-                            @endforeach
-                        </select>
-                        @error('ausstattungsqualitaet')<p class="error">{{ $message }}</p>@enderror
-                    </div>
-
-                    <div class="field @error('heizungsart') has-error @enderror">
-                        <label for="heizungsart">Heizungsart</label>
-                        <select id="heizungsart" name="heizungsart">
-                            <option value="">Bitte wählen</option>
-                            @foreach (\App\Enums\Heizungsart::options() as $value => $label)
-                                <option value="{{ $value }}" @selected(old('heizungsart', $listing->heizungsart?->value) === $value)>{{ $label }}</option>
-                            @endforeach
-                        </select>
-                        @error('heizungsart')<p class="error">{{ $message }}</p>@enderror
-                    </div>
-
-                    <div class="field @error('energietraeger') has-error @enderror">
-                        <label for="energietraeger">Energieträger</label>
-                        <select id="energietraeger" name="energietraeger">
-                            <option value="">Bitte wählen</option>
-                            @foreach (\App\Enums\Energietraeger::options() as $value => $label)
-                                <option value="{{ $value }}" @selected(old('energietraeger', $listing->energietraeger?->value) === $value)>{{ $label }}</option>
-                            @endforeach
-                        </select>
-                        @error('energietraeger')<p class="error">{{ $message }}</p>@enderror
-                    </div>
-                </div>
-
-                @if ($listing->istMiete())
-                    <div class="field @error('heizkosten_versorgung') has-error @enderror">
-                        <label for="heizkosten_versorgung">Heizkostenversorgung</label>
-                        <select id="heizkosten_versorgung" name="heizkosten_versorgung">
-                            <option value="">Bitte wählen</option>
-                            @foreach (\App\Enums\HeizkostenVersorgung::options() as $value => $label)
-                                <option value="{{ $value }}" @selected(old('heizkosten_versorgung', $listing->heizkosten_versorgung?->value) === $value)>{{ $label }}</option>
-                            @endforeach
-                        </select>
-                        <p class="hint">Kann bei Bedarf auch in Schritt 4 (Preise) gewählt werden.</p>
-                        @error('heizkosten_versorgung')<p class="error">{{ $message }}</p>@enderror
-                    </div>
-                @endif
-
-                <div class="grid grid-2">
-                    <div class="field @error('verfuegbar_ab_typ') has-error @enderror">
-                        <label for="verfuegbar_ab_typ">Verfügbar ab</label>
-                        <select id="verfuegbar_ab_typ" name="verfuegbar_ab_typ">
-                            <option value="">Bitte wählen</option>
-                            @foreach (\App\Enums\VerfuegbarAbTyp::options() as $value => $label)
-                                <option value="{{ $value }}" @selected(old('verfuegbar_ab_typ', $listing->verfuegbar_ab_typ?->value) === $value)>{{ $label }}</option>
-                            @endforeach
-                        </select>
-                        @error('verfuegbar_ab_typ')<p class="error">{{ $message }}</p>@enderror
-                    </div>
-
-                    <div class="field @error('verfuegbar_ab_datum') has-error @enderror">
-                        <label for="verfuegbar_ab_datum">Verfügbar ab (Datum)</label>
-                        <input type="date" id="verfuegbar_ab_datum" name="verfuegbar_ab_datum" value="{{ old('verfuegbar_ab_datum', $listing->verfuegbar_ab_datum?->format('Y-m-d')) }}">
-                        @error('verfuegbar_ab_datum')<p class="error">{{ $message }}</p>@enderror
-                    </div>
-                </div>
-
-                @php $ausstattung = old('ausstattung', $listing->ausstattung ?? []); @endphp
-                <div class="field">
-                    <label>Ausstattung</label>
-                    <div class="checkbox-group">
-                        @foreach ([
-                            'balkon' => 'Balkon', 'terrasse' => 'Terrasse', 'garten' => 'Garten', 'keller' => 'Keller',
-                            'aufzug' => 'Aufzug', 'einbaukueche' => 'Einbauküche', 'gaeste_wc' => 'Gäste-WC',
-                            'barrierefrei' => 'Barrierefrei', 'moebliert' => 'Möbliert', 'wg_geeignet' => 'WG-geeignet',
-                            'haustiere_erlaubt' => 'Haustiere erlaubt',
-                        ] as $schluessel => $label)
-                            <label class="field-inline">
-                                <input type="hidden" name="ausstattung[{{ $schluessel }}]" value="0">
-                                <input type="checkbox" name="ausstattung[{{ $schluessel }}]" value="1" @checked($ausstattung[$schluessel] ?? false)>
-                                <span>{{ $label }}</span>
-                            </label>
+                <div class="stack">
+                    <p class="eyebrow">Adressfreigabe im Inserat</p>
+                    <div class="kachel-grid">
+                        @foreach (\App\Enums\AdressFreigabe::options() as $wert => $label)
+                            <x-flow.kachel
+                                name="adress_freigabe"
+                                :value="$wert"
+                                :label="$label"
+                                :checked="old('adress_freigabe', $listing->adress_freigabe->value) === $wert"
+                            />
                         @endforeach
                     </div>
+                    <p class="hint">Bei "Nur PLZ und Ort" werden Straße und Hausnummer nicht im Inserat und nicht in erzeugten Texten verwendet.</p>
                 </div>
 
-                <div class="grid grid-2">
-                    <div class="field @error('stellplatz_typ') has-error @enderror">
-                        <label for="stellplatz_typ">Stellplatz</label>
-                        <select id="stellplatz_typ" name="stellplatz_typ">
-                            <option value="">Bitte wählen</option>
-                            @foreach (\App\Enums\StellplatzTyp::options() as $value => $label)
-                                <option value="{{ $value }}" @selected(old('stellplatz_typ', $listing->stellplatz_typ?->value) === $value)>{{ $label }}</option>
-                            @endforeach
-                        </select>
-                        @error('stellplatz_typ')<p class="error">{{ $message }}</p>@enderror
-                    </div>
+                <div class="card card-canvas">
+                    <div class="card-body">
+                        <button type="button" class="collapsible-summary" data-toggle="#interne-angaben" aria-expanded="false">
+                            <span>Interne Angaben (nicht Teil des Inserats)</span>
+                            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                                <path d="M6 9l6 6 6-6" stroke-linecap="round" stroke-linejoin="round"/>
+                            </svg>
+                        </button>
+                        <div id="interne-angaben" class="collapsible-body stack" hidden>
+                            <p class="hint">Diese Felder gehen nie an FLOWFACT oder an Portale.</p>
 
-                    <div class="field @error('stellplatz_anzahl') has-error @enderror">
-                        <label for="stellplatz_anzahl">Anzahl Stellplätze</label>
-                        <input type="number" id="stellplatz_anzahl" name="stellplatz_anzahl" value="{{ old('stellplatz_anzahl', $listing->stellplatz_anzahl) }}" min="0">
-                        @error('stellplatz_anzahl')<p class="error">{{ $message }}</p>@enderror
+                            <div class="grid grid-2">
+                                <x-flow.feld name="gebaeudebezeichnung" label="Gebäudebezeichnung" :value="$listing->internal?->gebaeudebezeichnung" />
+                                <x-flow.feld name="einheitsnummer" label="Einheitsnummer" :value="$listing->internal?->einheitsnummer" />
+                            </div>
+
+                            <x-flow.feld name="lage_im_gebaeude" label="Lage im Gebäude" :value="$listing->internal?->lage_im_gebaeude" />
+                            <x-flow.feld name="verwaltungsobjekt_referenz" label="Bezug zum Verwaltungsbestand" :value="$listing->internal?->verwaltungsobjekt_referenz" />
+                            <x-flow.feld name="eigentuemer_name" label="Eigentümer" :value="$listing->internal?->eigentuemer_name" />
+                            <x-flow.feld name="eigentuemer_kontakt" label="Eigentümerkontakt" type="textarea" rows="2" :value="$listing->internal?->eigentuemer_kontakt" />
+                            <x-flow.feld name="interne_notizen" label="Interne Notizen" type="textarea" rows="3" :value="$listing->internal?->interne_notizen" />
+                            <x-flow.feld name="schluessel_hinweis" label="Schlüsselhinweis" type="textarea" rows="2" :value="$listing->internal?->schluessel_hinweis" />
+                            <x-flow.feld name="besichtigung_intern" label="Hinweise zur Besichtigung (intern)" type="textarea" rows="2" :value="$listing->internal?->besichtigung_intern" />
+                            <x-flow.feld name="kalkulation_notiz" label="Kalkulationsnotiz" type="textarea" rows="2" :value="$listing->internal?->kalkulation_notiz" />
+                        </div>
                     </div>
                 </div>
 

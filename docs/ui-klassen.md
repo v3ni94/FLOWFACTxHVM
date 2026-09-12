@@ -91,3 +91,28 @@ border-color 150ms. prefers-reduced-motion wird respektiert.
 | data-toggle="#id" | Ein- und Ausblenden eines Bereichs |
 
 Jede Interaktion funktioniert ohne JavaScript grundlegend (Formulare absenden, Bestätigung als Zwischenseite).
+
+## Ergänzungen aus Welle 2 (12.09.2026)
+
+| Klasse | Bedeutung |
+| --- | --- |
+| .kachel, .kachel.is-selected, .kachel-grid | Große Auswahlkacheln (Vermietung/Verkauf, Objektart, Kostenstruktur, Stellplatzmodus, Energieausweisstatus) |
+| .dreiwert, .dreiwert label, .dreiwert input:checked + span | Dreiwertige Auswahl Ja / Nein / Nicht bekannt als segmentierte Pille |
+| .autosave-status, .autosave-status.is-saving, .is-saved, .is-error | Anzeige des Speicherstands je Formular |
+| .wizard-actions | Leiste mit Zurück, Entwurf speichern, Weiter |
+| .collapsible, .collapsible-toggle, .collapsible-body | Einklappbarer Bereich (interne Angaben) |
+| .tab-nav, .tab-panel, .tab-panel.is-active | Reiter (Medienkategorien) |
+| .stepper li.has-issues | Schritt mit blockierenden Befunden |
+| .field-grow | Feld, das den verfügbaren Platz füllt |
+| .thumb-badge | Kennzeichen auf Vorschaubildern (Titelbild, nicht freigegeben) |
+| .rot-90, .rot-180, .rot-270 | Vorschau-Drehung per CSS-Transform; die Bilddatei wird erst bei der Übertragung gedreht |
+
+Neue Datenattribute in public/js/flow.js:
+
+| Datenattribut | Bedeutung |
+| --- | --- |
+| data-autosave="URL" | Formular speichert per PATCH 1,5 Sekunden nach der letzten Eingabe und bei Verlassen eines Feldes; Anzeige in [data-autosave-status] |
+| data-reveals="#id" | Kachel oder Auswahl blendet einen abhängigen Bereich ein |
+| data-tabs | Reiterleiste mit Tastatursteuerung |
+
+Blade-Komponenten: x-flow.kachel, x-flow.dreiwert, x-flow.feld (resources/views/components/flow).

@@ -50,9 +50,17 @@ return [
 
         // ADR-012: Objektmedien außerhalb des Webroots, Auslieferung nur über
         // signierte Routen. Wurzel konfigurierbar über MEDIA_ROOT.
+        //
+        // Bewusst nicht über config('media.root') aufgelöst: Konfigurationsdateien
+        // werden von Laravel alphabetisch geladen ("filesystems" vor "media"), zum
+        // Zeitpunkt dieses Arrays ist media.php noch nicht in der Config-Registry
+        // vorhanden, config('media.root') liefert dann still null statt eines
+        // Pfads, und jede Nutzung der Disk "media" schlägt mit einem
+        // TypeError aus Flysystem fehl. Der Ausdruck ist identisch mit
+        // config/media.php, beide Stellen bleiben synchron zu halten.
         'media' => [
             'driver' => 'local',
-            'root' => config('media.root'),
+            'root' => env('MEDIA_ROOT') ?: storage_path('app/private/media'),
             'visibility' => 'private',
             'throw' => false,
             'report' => false,

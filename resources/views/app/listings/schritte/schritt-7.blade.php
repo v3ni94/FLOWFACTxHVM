@@ -1,65 +1,63 @@
 @extends('layouts.app')
 
-@section('title', 'Intern')
+@section('title', 'Überschrift und interne Bezeichnung')
 
 @section('content')
     @include('app.listings.schritte._header')
 
-    @php $internal = $listing->internal; @endphp
+    <div class="grid grid-2">
+        <div class="card">
+            <div class="card-title">Überschrift</div>
+            <div class="card-body stack">
+                <form method="POST" action="{{ route('app.listings.step.store', ['listing' => $listing, 'schritt' => 7]) }}" class="stack" data-autosave="{{ route('app.listings.step.autosave', ['listing' => $listing, 'schritt' => 7]) }}">
+                    @csrf
 
-    <div class="card">
-        <div class="card-body stack">
-            <div class="alert alert-warning">
-                Diese Angaben sind intern und werden nie an FLOWFACT oder Portale übertragen.
+                    <div class="field @error('titel') has-error @enderror">
+                        <label for="titel">Überschrift (höchstens 100 Zeichen)</label>
+                        <input type="text" id="titel" name="titel" maxlength="100" value="{{ old('titel', $listing->titel) }}" required>
+                        @error('titel')<p class="error">{{ $message }}</p>@enderror
+                    </div>
+
+                    <div class="field @error('interne_bezeichnung') has-error @enderror">
+                        <label for="interne_bezeichnung">Interne Bezeichnung</label>
+                        <input type="text" id="interne_bezeichnung" name="interne_bezeichnung" maxlength="255" value="{{ old('interne_bezeichnung', $listing->interne_bezeichnung) }}" placeholder="{{ $interneBezeichnungVorschlag }}">
+                        <p class="hint">Vorschlag nach dem hinterlegten Muster: {{ $interneBezeichnungVorschlag !== '' ? $interneBezeichnungVorschlag : 'keine Angaben vorhanden' }}. Nur intern sichtbar, nie Teil des Inserats.</p>
+                        @error('interne_bezeichnung')<p class="error">{{ $message }}</p>@enderror
+                    </div>
+
+                    @include('app.listings.schritte._speichern')
+                </form>
+
+                @if ($titelVorschlaege !== [])
+                    <div class="field">
+                        <label>Vorschläge aus den erfassten Daten</label>
+                        <div class="cluster">
+                            @foreach ($titelVorschlaege as $vorschlag)
+                                <form method="POST" action="{{ route('app.listings.step.store', ['listing' => $listing, 'schritt' => 7]) }}">
+                                    @csrf
+                                    <input type="hidden" name="titel" value="{{ $vorschlag }}">
+                                    <input type="hidden" name="interne_bezeichnung" value="{{ $listing->interne_bezeichnung }}">
+                                    <button type="submit" class="btn btn-secondary btn-sm">{{ $vorschlag }}</button>
+                                </form>
+                            @endforeach
+                        </div>
+                        <p class="hint">Auswahl übernimmt den Vorschlag unmittelbar als Überschrift.</p>
+                    </div>
+                @endif
             </div>
+        </div>
 
-            <form method="POST" action="{{ route('app.listings.step.store', ['listing' => $listing, 'schritt' => 7]) }}" class="stack">
-                @csrf
-
-                <div class="field @error('eigentuemer_name') has-error @enderror">
-                    <label for="eigentuemer_name">Eigentümer</label>
-                    <input type="text" id="eigentuemer_name" name="eigentuemer_name" value="{{ old('eigentuemer_name', $internal?->eigentuemer_name) }}">
-                    @error('eigentuemer_name')<p class="error">{{ $message }}</p>@enderror
-                </div>
-
-                <div class="field @error('eigentuemer_kontakt') has-error @enderror">
-                    <label for="eigentuemer_kontakt">Kontakt Eigentümer</label>
-                    <textarea id="eigentuemer_kontakt" name="eigentuemer_kontakt" rows="3">{{ old('eigentuemer_kontakt', $internal?->eigentuemer_kontakt) }}</textarea>
-                    @error('eigentuemer_kontakt')<p class="error">{{ $message }}</p>@enderror
-                </div>
-
-                <div class="field @error('verwaltungsobjekt_referenz') has-error @enderror">
-                    <label for="verwaltungsobjekt_referenz">Verwaltungsobjekt-Referenz</label>
-                    <input type="text" id="verwaltungsobjekt_referenz" name="verwaltungsobjekt_referenz" value="{{ old('verwaltungsobjekt_referenz', $internal?->verwaltungsobjekt_referenz) }}">
-                    @error('verwaltungsobjekt_referenz')<p class="error">{{ $message }}</p>@enderror
-                </div>
-
-                <div class="field @error('interne_notizen') has-error @enderror">
-                    <label for="interne_notizen">Interne Notizen</label>
-                    <textarea id="interne_notizen" name="interne_notizen" rows="4">{{ old('interne_notizen', $internal?->interne_notizen) }}</textarea>
-                    @error('interne_notizen')<p class="error">{{ $message }}</p>@enderror
-                </div>
-
-                <div class="field @error('schluessel_hinweis') has-error @enderror">
-                    <label for="schluessel_hinweis">Schlüsselhinweis</label>
-                    <textarea id="schluessel_hinweis" name="schluessel_hinweis" rows="2">{{ old('schluessel_hinweis', $internal?->schluessel_hinweis) }}</textarea>
-                    @error('schluessel_hinweis')<p class="error">{{ $message }}</p>@enderror
-                </div>
-
-                <div class="field @error('besichtigung_intern') has-error @enderror">
-                    <label for="besichtigung_intern">Besichtigung (intern)</label>
-                    <textarea id="besichtigung_intern" name="besichtigung_intern" rows="3">{{ old('besichtigung_intern', $internal?->besichtigung_intern) }}</textarea>
-                    @error('besichtigung_intern')<p class="error">{{ $message }}</p>@enderror
-                </div>
-
-                <div class="field @error('kalkulation_notiz') has-error @enderror">
-                    <label for="kalkulation_notiz">Kalkulationsnotiz</label>
-                    <textarea id="kalkulation_notiz" name="kalkulation_notiz" rows="3">{{ old('kalkulation_notiz', $internal?->kalkulation_notiz) }}</textarea>
-                    @error('kalkulation_notiz')<p class="error">{{ $message }}</p>@enderror
-                </div>
-
-                @include('app.listings.schritte._speichern')
-            </form>
+        <div class="card card-canvas">
+            <div class="card-title">Technische Referenz</div>
+            <div class="card-body stack">
+                <dl class="kv">
+                    <dt>Objektnummer</dt>
+                    <dd>{{ $listing->objektnummer }}</dd>
+                    <dt>UUID</dt>
+                    <dd>{{ $listing->uuid }}</dd>
+                </dl>
+                <p class="hint">Diese Referenz wird beim Anlegen vergeben und ändert sich nie, auch nicht beim Duplizieren.</p>
+            </div>
         </div>
     </div>
 @endsection

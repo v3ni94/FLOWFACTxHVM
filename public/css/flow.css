@@ -742,6 +742,16 @@ button, input, select, textarea {
   object-fit: cover;
 }
 
+/* Kleines Vorschaubild in Tabellenzeilen (Objektübersicht). */
+.thumb-sm {
+  display: block;
+  width: 56px;
+  height: 42px;
+  border-radius: var(--radius-field);
+  object-fit: cover;
+  box-shadow: var(--shadow-hairline);
+}
+
 .thumb-actions {
   display: flex;
   justify-content: space-between;
@@ -830,6 +840,251 @@ button, input, select, textarea {
   width: 100%;
   max-width: 440px;
 }
+
+/* -------------------------------------------------------------------------
+ * Assistent: Kacheln (große Auswahlschaltflächen, ADR-002, docs/ui-klassen.md
+ * erweitert um diesen Abschnitt für den neuen Acht-Schritte-Assistenten,
+ * Masterprompt-Abgleich B.1)
+ * ---------------------------------------------------------------------- */
+
+.kachel-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.kachel {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 16px;
+  border-radius: var(--radius-card);
+  border: 1px solid var(--hvm-linie);
+  background: #fff;
+  cursor: pointer;
+  transition: border-color 150ms, background-color 150ms, color 150ms;
+}
+
+.kachel:hover {
+  border-color: var(--hvm-mittelgrau);
+}
+
+.kachel input {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 18px;
+  height: 18px;
+  accent-color: var(--hvm-orange);
+}
+
+.kachel-title {
+  font-weight: 600;
+  padding-right: 24px;
+}
+
+.kachel-hint {
+  font-size: 13px;
+  color: var(--hvm-text-sekundaer);
+}
+
+.kachel.is-selected,
+.kachel:has(input:checked) {
+  border-color: var(--hvm-orange-dark);
+  background: var(--hvm-orange-soft);
+}
+
+.kachel:has(input:focus-visible) {
+  outline: 2px solid var(--hvm-orange-dark);
+  outline-offset: 2px;
+}
+
+.kachel-grid.kachel-grid-sm .kachel {
+  padding: 10px 12px;
+}
+
+/* -------------------------------------------------------------------------
+ * Assistent: Dreiwertfeld (Ja / Nein / Nicht bekannt als Segmentgruppe)
+ * ---------------------------------------------------------------------- */
+
+.dreiwert {
+  display: inline-flex;
+  border: 1px solid var(--hvm-hellgrau);
+  border-radius: var(--radius-pill);
+  overflow: hidden;
+}
+
+.dreiwert input {
+  position: absolute;
+  opacity: 0;
+  width: 1px;
+  height: 1px;
+}
+
+.dreiwert label {
+  padding: 8px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--hvm-text-sekundaer);
+  cursor: pointer;
+  transition: background-color 150ms, color 150ms;
+}
+
+.dreiwert label:not(:last-child) {
+  border-right: 1px solid var(--hvm-hellgrau);
+}
+
+.dreiwert input:checked + label {
+  background: var(--hvm-orange);
+  color: var(--hvm-graphit);
+}
+
+.dreiwert input:focus-visible + label {
+  outline: 2px solid var(--hvm-orange-dark);
+  outline-offset: -2px;
+}
+
+.dreiwert-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--hvm-linie);
+}
+
+.dreiwert-row:last-child {
+  border-bottom: none;
+}
+
+.dreiwert-row-label {
+  font-size: 14px;
+}
+
+/* -------------------------------------------------------------------------
+ * Assistent: Autosave-Anzeige und Zurück/Weiter-Leiste
+ * ---------------------------------------------------------------------- */
+
+.autosave-status {
+  font-size: 13px;
+  color: var(--hvm-text-sekundaer);
+}
+
+.autosave-status.is-saving {
+  color: var(--status-info);
+}
+
+.autosave-status.is-saved {
+  color: var(--status-success);
+}
+
+.autosave-status.is-error {
+  color: var(--status-error);
+}
+
+.field-grow {
+  flex: 1;
+  min-width: 220px;
+}
+
+.wizard-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+/* -------------------------------------------------------------------------
+ * Assistent: aufklappbare Karte (interne Angaben) und Reiter (Medien)
+ * ---------------------------------------------------------------------- */
+
+.collapsible-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  font-weight: 600;
+  color: var(--hvm-text);
+  cursor: pointer;
+  text-align: left;
+}
+
+.collapsible-summary .icon {
+  transition: transform 150ms;
+}
+
+.collapsible-summary[aria-expanded="true"] .icon {
+  transform: rotate(180deg);
+}
+
+.collapsible-body {
+  margin-top: 12px;
+}
+
+.tab-nav {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  border-bottom: 1px solid var(--hvm-linie);
+  margin-bottom: 16px;
+}
+
+.tab-nav button {
+  padding: 10px 16px;
+  border: none;
+  background: none;
+  font: inherit;
+  font-weight: 600;
+  color: var(--hvm-text-sekundaer);
+  cursor: pointer;
+  border-bottom: 3px solid transparent;
+  margin-bottom: -1px;
+}
+
+.tab-nav button.is-active {
+  color: var(--hvm-text);
+  border-bottom-color: var(--hvm-orange);
+}
+
+.tab-panel[hidden] {
+  display: none !important;
+}
+
+/* -------------------------------------------------------------------------
+ * Assistent: Stepper-Warnmarker für Schritte mit blockierenden Befunden
+ * ---------------------------------------------------------------------- */
+
+.stepper li.has-issues a::after {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-left: 6px;
+  border-radius: 50%;
+  background: var(--status-error);
+  vertical-align: middle;
+}
+
+.thumb.is-not-freigegeben {
+  opacity: .6;
+}
+
+.thumb-badge {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+}
+
+.thumb img.rot-90 { transform: rotate(90deg); }
+.thumb img.rot-180 { transform: rotate(180deg); }
+.thumb img.rot-270 { transform: rotate(270deg); }
 
 /* -------------------------------------------------------------------------
  * Hilfsklassen

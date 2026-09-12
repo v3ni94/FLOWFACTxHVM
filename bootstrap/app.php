@@ -16,6 +16,7 @@ $app = Application::configure(basePath: dirname(__DIR__))
             __DIR__.'/../routes/wartung.php',
             __DIR__.'/../routes/flowfact.php',
             __DIR__.'/../routes/ki.php',
+            __DIR__.'/../routes/defaults.php',
         ],
         commands: __DIR__.'/../routes/console.php',
         health: '/up',

@@ -67,6 +67,35 @@ final class ListingIndexAndCreateTest extends TestCase
         $response->assertDontSee($kein_treffer->objektnummer);
     }
 
+    public function test_die_objektuebersicht_kann_nach_bearbeiter_gefiltert_werden(): void
+    {
+        $user = User::factory()->create();
+        $bearbeiter = User::factory()->create(['name' => 'Anna Beispiel']);
+        $anderer = User::factory()->create();
+
+        $eigenes = Listing::factory()->create(['bearbeiter_user_id' => $bearbeiter->id]);
+        $fremdes = Listing::factory()->create(['bearbeiter_user_id' => $anderer->id]);
+
+        $response = $this->actingAs($user)->get(route('app.listings.index', ['bearbeiter' => $bearbeiter->id]));
+
+        $response->assertOk();
+        $response->assertSee($eigenes->objektnummer);
+        $response->assertDontSee($fremdes->objektnummer);
+    }
+
+    public function test_die_objektdetailseite_zeigt_keine_internen_marker_aber_die_historie_ist_verlinkt(): void
+    {
+        $user = User::factory()->create();
+        $listing = Listing::factory()->vollstaendig()->create();
+        $listing->internal()->create(['interne_notizen' => 'INTERN-MARKER-DETAILSEITE']);
+
+        $response = $this->actingAs($user)->get(route('app.listings.show', $listing));
+
+        $response->assertOk();
+        $response->assertDontSee('INTERN-MARKER-DETAILSEITE');
+        $response->assertSee(route('app.listings.history', $listing), false);
+    }
+
     public function test_ein_neues_objekt_wird_als_entwurf_angelegt_und_leitet_zu_schritt_eins_weiter(): void
     {
         $user = User::factory()->create();
@@ -82,6 +111,7 @@ final class ListingIndexAndCreateTest extends TestCase
         $this->assertSame(ListingStatus::Entwurf, $listing->status);
         $this->assertSame('DE', $listing->land);
         $this->assertSame($user->id, $listing->erstellt_von_user_id);
+        $this->assertSame($user->id, $listing->bearbeiter_user_id);
         $this->assertSame($user->id, $listing->ansprechpartner_user_id);
         $this->assertMatchesRegularExpression('/^MF-\d{4}-\d{4}$/', $listing->objektnummer);
 

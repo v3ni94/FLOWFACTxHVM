@@ -37,11 +37,30 @@ final class PortalSummary
             return 'Keine Portale';
         }
 
-        return $veroeffentlichungen
+        $zusammenfassung = $veroeffentlichungen
             ->groupBy(fn ($p) => $p->status->value)
             ->map(fn (Collection $gruppe, string $status): string => $gruppe->count().' '.(self::KURZLABEL[$status] ?? $status))
             ->values()
             ->implode(', ');
+
+        return self::istTeilweiseVeroeffentlicht($listing) ? 'Teilweise veröffentlicht: '.$zusammenfassung : $zusammenfassung;
+    }
+
+    /**
+     * Ob mindestens ein Portal aktiv ist und mindestens ein weiteres nicht
+     * (Masterprompt Abschnitt 7): das Objekt ist weder vollständig noch gar
+     * nicht veröffentlicht.
+     */
+    public static function istTeilweiseVeroeffentlicht(Listing $listing): bool
+    {
+        $status = $listing->portalPublications->map(fn ($p) => $p->status);
+
+        if (! $status->contains(PortalStatus::Aktiv)) {
+            return false;
+        }
+
+        return $status->contains(fn (PortalStatus $wert): bool => $wert !== PortalStatus::Aktiv
+            && $wert !== PortalStatus::NichtVeroeffentlicht);
     }
 
     public static function badgeClass(Listing $listing): string

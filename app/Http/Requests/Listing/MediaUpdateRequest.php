@@ -29,6 +29,7 @@ class MediaUpdateRequest extends FormRequest
         return [
             'titel' => ['nullable', 'string', 'max:255'],
             'im_inserat' => ['sometimes', 'boolean'],
+            'freigegeben' => ['sometimes', 'boolean'],
         ];
     }
 }

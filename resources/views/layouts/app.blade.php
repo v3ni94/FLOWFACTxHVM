@@ -34,6 +34,9 @@
                     @if (Route::has('admin.ki.edit') && auth()->user()->isAdmin())
                         <a href="{{ route('admin.ki.edit') }}" class="{{ request()->routeIs('admin.ki.*') ? 'is-active' : '' }}">KI-Texte</a>
                     @endif
+                    @if (Route::has('admin.defaults.edit') && auth()->user()->isAdmin())
+                        <a href="{{ route('admin.defaults.edit') }}" class="{{ request()->routeIs('admin.defaults.*') ? 'is-active' : '' }}">Vorgaben</a>
+                    @endif
                 </nav>
 
                 <div class="app-user">

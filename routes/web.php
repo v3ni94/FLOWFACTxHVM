@@ -73,6 +73,9 @@ Route::middleware(['auth', EnsureUserIsActive::class])->group(function () {
     Route::post('/app/objekte/{listing}/uebertragen', [ReviewController::class, 'transfer'])->name('app.listings.transfer');
     Route::post('/app/objekte/{listing}/veroeffentlichen', [ReviewController::class, 'publish'])->name('app.listings.publish');
     Route::post('/app/objekte/{listing}/zurueckziehen', [ReviewController::class, 'withdraw'])->name('app.listings.withdraw');
+    Route::post('/app/objekte/{listing}/energieausweis/ausnahme', [ReviewController::class, 'confirmEnergyException'])
+        ->middleware('role:admin')
+        ->name('app.listings.energy-exception.confirm');
 
     // Medien (Schritt 6)
     Route::post('/app/objekte/{listing}/medien', [ListingMediaController::class, 'store'])->name('app.listings.media.store');

@@ -7,24 +7,30 @@ namespace App\Http\Controllers\App;
 use App\Domain\Listing\CompletenessCheck;
 use App\Domain\Listing\IllegalStatusTransitionException;
 use App\Domain\Listing\ListingStatusMachine;
+use App\Domain\Listing\PublishableFields;
 use App\Enums\ListingStatus;
+use App\Enums\Nutzungsstatus;
 use App\Enums\Objektart;
-use App\Enums\PortalStatus;
 use App\Enums\Vermarktungsart;
-use App\Flowfact\Sync\PublishingService;
 use App\Http\Controllers\App\Support\CompletenessFieldMap;
+use App\Http\Controllers\App\Support\PortalSummary;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Listing\CreateListingRequest;
-use App\Http\Requests\Listing\PublishRequest;
+use App\Http\Requests\Listing\DuplicateListingRequest;
 use App\Models\Listing;
+use App\Models\ListingMedia;
+use App\Models\User;
 use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 use Illuminate\View\View;
 
 /**
- * Objektübersicht, Anlage, Detailseite und Statusaktionen (Datenvertrag
- * Abschnitt 5 und 4, Architektur Abschnitt 4).
+ * Objektübersicht, Anlage, Detailseite, Historie und Duplizieren
+ * (Masterprompt Abschnitt 7 und 24, Masterprompt-Abgleich B.1, B.3).
  */
 class ListingController extends Controller
 {
@@ -35,25 +41,41 @@ class ListingController extends Controller
         $this->authorize('viewAny', Listing::class);
 
         $query = Listing::query()
-            ->with(['price', 'flowfactLink', 'portalPublications'])
+            ->with([
+                'price', 'flowfactLink', 'portalPublications', 'bearbeiter',
+                'media' => fn ($q) => $q->where('typ', 'bild')->orderBy('sortierung')->limit(1),
+            ])
             ->orderByDesc('updated_at');
 
         $status = $request->string('status')->value();
         $vermarktungsart = $request->string('vermarktungsart')->value();
+        $bearbeiterId = $request->string('bearbeiter')->value();
         $suche = trim($request->string('suche')->value());
 
         if ($status !== '') {
-            $query->where('status', $status);
+            if ($status === 'teilweise') {
+                $query->where('status', ListingStatus::Veroeffentlicht->value)
+                    ->whereHas('portalPublications', fn ($q) => $q->where('status', 'aktiv'))
+                    ->whereHas('portalPublications', fn ($q) => $q->where('status', '!=', 'aktiv'));
+            } else {
+                $query->where('status', $status);
+            }
         }
 
         if ($vermarktungsart !== '') {
             $query->where('vermarktungsart', $vermarktungsart);
         }
 
+        if ($bearbeiterId !== '') {
+            $query->where('bearbeiter_user_id', $bearbeiterId);
+        }
+
         if ($suche !== '') {
             $query->where(function ($sub) use ($suche): void {
                 $sub->where('objektnummer', 'like', '%'.$suche.'%')
                     ->orWhere('titel', 'like', '%'.$suche.'%')
+                    ->orWhere('interne_bezeichnung', 'like', '%'.$suche.'%')
+                    ->orWhere('strasse', 'like', '%'.$suche.'%')
                     ->orWhere('ort', 'like', '%'.$suche.'%');
             });
         }
@@ -62,12 +84,14 @@ class ListingController extends Controller
 
         return view('app.listings.index', [
             'listings' => $listings,
-            'statusOptionen' => ListingStatus::options(),
+            'statusOptionen' => array_merge(ListingStatus::options(), ['teilweise' => 'Teilweise veröffentlicht']),
             'vermarktungsartOptionen' => Vermarktungsart::options(),
             'objektartOptionen' => Objektart::options(),
+            'bearbeiterOptionen' => User::query()->where('is_active', true)->orderBy('name')->pluck('name', 'id'),
             'filter' => [
                 'status' => $status,
                 'vermarktungsart' => $vermarktungsart,
+                'bearbeiter' => $bearbeiterId,
                 'suche' => $suche,
             ],
         ]);
@@ -82,6 +106,7 @@ class ListingController extends Controller
             'adresse_im_inserat_anzeigen' => true,
             'status' => ListingStatus::Entwurf,
             'erstellt_von_user_id' => $request->user()->id,
+            'bearbeiter_user_id' => $request->user()->id,
             'ansprechpartner_user_id' => $request->user()->id,
         ]);
 
@@ -96,8 +121,9 @@ class ListingController extends Controller
 
         $listing->load([
             'price', 'energy', 'internal', 'media', 'texts',
-            'flowfactLink', 'portalPublications', 'ansprechpartner', 'erstelltVon',
+            'flowfactLink', 'portalPublications', 'ansprechpartner', 'erstelltVon', 'bearbeiter',
             'transferLogs' => fn ($query) => $query->take(20),
+            'portalStatusLogs' => fn ($query) => $query->take(20),
         ]);
 
         $vollstaendigkeit = app(CompletenessCheck::class)->check($listing);
@@ -109,14 +135,142 @@ class ListingController extends Controller
             ])
             ->values();
 
-        $publishingService = app(PublishingService::class);
-
         return view('app.listings.show', [
             'listing' => $listing,
             'vollstaendigkeit' => $vollstaendigkeit,
             'fehlendMitSchritt' => $fehlendMitSchritt,
-            'portale' => $publishingService->isConfigured() ? $publishingService->portals() : [],
-            'publishingConfigured' => $publishingService->isConfigured(),
+            'portalBadge' => PortalSummary::badgeClass($listing),
+            'portalText' => PortalSummary::text($listing),
+        ]);
+    }
+
+    public function history(Request $request, Listing $listing): View
+    {
+        $this->authorize('view', $listing);
+
+        // Interne Felder (listing_internals) werden protokolliert, aber nur
+        // Benutzern mit Bearbeitungsrecht angezeigt, nie exportiert
+        // (Masterprompt-Abgleich B.6).
+        $kannBearbeiten = $request->user()?->can('update', $listing) ?? false;
+
+        $aenderungen = $listing->changes()
+            ->with('user')
+            ->when(! $kannBearbeiten, fn ($query) => $query->where('feld', 'not like', 'listing_internals.%'))
+            ->paginate(50);
+
+        return view('app.listings.historie', [
+            'listing' => $listing,
+            'aenderungen' => $aenderungen,
+        ]);
+    }
+
+    /**
+     * Dupliziert ein Objekt (Masterprompt Abschnitt 24, Masterprompt-Abgleich
+     * B.1, B.3): kopiert die Inseratsfelder (ohne uuid, objektnummer, titel,
+     * interne_bezeichnung), Preise, Energieausweis, interne Daten und die
+     * Mediendateien physisch mit neuen Dateinamen. FLOWFACT-Verknüpfung,
+     * Portalveröffentlichungen, Freigabeversionen und KI-Texte werden nie
+     * übernommen; die Provisionsbestätigung und der Nutzungsstatus werden
+     * zurückgesetzt.
+     */
+    public function duplicate(DuplicateListingRequest $request, Listing $listing): RedirectResponse
+    {
+        $listing->load(['price', 'energy', 'internal', 'media']);
+
+        $nichtKopiert = [];
+
+        $kopie = DB::transaction(function () use ($request, $listing, &$nichtKopiert): Listing {
+            $kopie = new Listing;
+
+            foreach (PublishableFields::LISTING as $feld) {
+                if (in_array($feld, ['uuid', 'objektnummer', 'titel'], true)) {
+                    continue;
+                }
+
+                $kopie->{$feld} = $listing->{$feld};
+            }
+
+            $kopie->interne_bezeichnung = null;
+            $kopie->nutzungsstatus = Nutzungsstatus::Unbekannt;
+            $kopie->status = ListingStatus::Entwurf;
+            $kopie->erstellt_von_user_id = $request->user()->id;
+            $kopie->bearbeiter_user_id = $request->user()->id;
+            $kopie->freigegeben_fuer_alle = false;
+            $kopie->save();
+
+            $nichtKopiert = ['Überschrift', 'Interne Bezeichnung', 'Nutzungsstatus', 'FLOWFACT-Verknüpfung', 'Portalveröffentlichungen', 'Freigabeversionen', 'KI-Texte', 'Provisionsbestätigung'];
+
+            if ($listing->price !== null) {
+                $preisDaten = [];
+
+                foreach (PublishableFields::PRICE as $feld) {
+                    $preisDaten[$feld] = $listing->price->{$feld};
+                }
+
+                $kopie->price()->create($preisDaten);
+            }
+
+            if ($listing->energy !== null) {
+                $energieDaten = [];
+
+                foreach (PublishableFields::ENERGY as $feld) {
+                    $energieDaten[$feld] = $listing->energy->{$feld};
+                }
+
+                $kopie->energy()->create($energieDaten);
+            }
+
+            if ($listing->internal !== null) {
+                $kopie->internal()->create($listing->internal->only([
+                    'eigentuemer_name', 'eigentuemer_kontakt', 'verwaltungsobjekt_referenz',
+                    'interne_notizen', 'schluessel_hinweis', 'besichtigung_intern', 'kalkulation_notiz',
+                    'gebaeudebezeichnung', 'einheitsnummer', 'lage_im_gebaeude',
+                ]));
+            }
+
+            foreach ($listing->media as $medium) {
+                $this->kopiereMedium($kopie, $medium);
+            }
+
+            return $kopie;
+        });
+
+        return redirect()
+            ->route('app.listings.step', ['listing' => $kopie, 'schritt' => 1])
+            ->with('status', 'Das Objekt wurde als "'.$kopie->objektnummer.'" dupliziert.')
+            ->with('nicht_kopiert', $nichtKopiert);
+    }
+
+    private function kopiereMedium(Listing $kopie, ListingMedia $original): void
+    {
+        $endung = pathinfo($original->pfad, PATHINFO_EXTENSION);
+        $verzeichnis = 'listings/'.$kopie->uuid;
+        $neuerDateiname = Str::random(32).($endung !== '' ? '.'.$endung : '');
+        $neuerPfad = $verzeichnis.'/'.$neuerDateiname;
+
+        if (! Storage::disk('media')->exists($original->pfad)) {
+            return;
+        }
+
+        Storage::disk('media')->copy($original->pfad, $neuerPfad);
+
+        $inhalt = Storage::disk('media')->get($neuerPfad) ?? '';
+
+        $kopie->media()->create([
+            'typ' => $original->typ,
+            'dateiname_original' => $original->dateiname_original,
+            'pfad' => $neuerPfad,
+            'mime' => $original->mime,
+            'groesse_bytes' => $original->groesse_bytes,
+            'breite' => $original->breite,
+            'hoehe' => $original->hoehe,
+            'sortierung' => $original->sortierung,
+            'titel' => $original->titel,
+            'im_inserat' => $original->im_inserat,
+            'freigegeben' => $original->freigegeben,
+            'rotation' => $original->rotation,
+            'flowfact_multimedia_id' => null,
+            'pruefsumme_sha256' => hash('sha256', $inhalt),
         ]);
     }
 
@@ -131,103 +285,5 @@ class ListingController extends Controller
         }
 
         return back()->with('status', 'Das Objekt wurde archiviert.');
-    }
-
-    public function markiereBereit(Listing $listing): RedirectResponse
-    {
-        $this->authorize('update', $listing);
-
-        try {
-            app(ListingStatusMachine::class)->transition($listing, ListingStatus::Bereit);
-        } catch (IllegalStatusTransitionException $exception) {
-            return back()->with('error', $exception->getMessage());
-        }
-
-        return back()->with('status', 'Das Objekt wurde als bereit markiert.');
-    }
-
-    public function transfer(Request $request, Listing $listing, PublishingService $publishingService): RedirectResponse
-    {
-        $this->authorize('update', $listing);
-
-        $ergebnis = $publishingService->transfer($listing, $request->user());
-
-        return back()
-            ->with($ergebnis->ok ? 'status' : 'error', $ergebnis->meldung)
-            ->with('warnungen', $ergebnis->warnungen);
-    }
-
-    public function publish(PublishRequest $request, Listing $listing, PublishingService $publishingService): RedirectResponse
-    {
-        // Prüfbericht 2026-09-11, Befund 10: Ein Entwurf darf nie durch einen
-        // einzigen POST angelegt, übertragen und veröffentlicht werden. Der
-        // bewusste Zwischenschritt "Als bereit markieren" bleibt Pflicht;
-        // hier wird nichts übertragen oder veröffentlicht.
-        if ($listing->status === ListingStatus::Entwurf) {
-            return back()->with('error', 'Bitte markieren Sie das Objekt zuerst als bereit.');
-        }
-
-        $vollstaendigkeit = app(CompletenessCheck::class)->check($listing);
-
-        if (! $vollstaendigkeit->istVollstaendig()) {
-            return back()->with(
-                'error',
-                'Das Objekt ist nicht vollständig und kann nicht veröffentlicht werden. Es fehlen: '
-                    .implode(', ', $vollstaendigkeit->fehlend).'.'
-            );
-        }
-
-        if ($vollstaendigkeit->hinweise !== []) {
-            $bestaetigt = (array) $request->input('hinweise_bestaetigt', []);
-
-            if (count($bestaetigt) < count($vollstaendigkeit->hinweise)) {
-                return back()->with(
-                    'error',
-                    'Bitte bestätigen Sie vor der Veröffentlichung alle Hinweise: '.implode(', ', $vollstaendigkeit->hinweise).'.'
-                );
-            }
-        }
-
-        /** @var list<string> $portale */
-        $portale = $request->validated('portale');
-
-        $ergebnis = $publishingService->publish($listing, $portale, $request->user());
-
-        if ($ergebnis->ok && $listing->status === ListingStatus::Bereit) {
-            app(ListingStatusMachine::class)->transition($listing, ListingStatus::Veroeffentlicht);
-        }
-
-        return back()
-            ->with($ergebnis->ok ? 'status' : 'error', $ergebnis->meldung)
-            ->with('warnungen', $ergebnis->warnungen);
-    }
-
-    public function withdraw(Request $request, Listing $listing, PublishingService $publishingService): RedirectResponse
-    {
-        $this->authorize('withdraw', $listing);
-
-        // Prüfbericht 2026-09-11, Befund 1: Publikationen im Status "fehler"
-        // oder "unbekannt" müssen ebenfalls zurückgezogen werden können,
-        // sonst bleibt ein Objekt nach einem gescheiterten Portalaufruf ohne
-        // Ausweg über die Oberfläche stehen.
-        $portalIds = $listing->portalPublications()
-            ->whereIn('status', [
-                PortalStatus::Angefordert->value,
-                PortalStatus::Aktiv->value,
-                PortalStatus::Fehler->value,
-                PortalStatus::Unbekannt->value,
-            ])
-            ->pluck('portal_id')
-            ->all();
-
-        $ergebnis = $publishingService->withdraw($listing, $portalIds, $request->user());
-
-        if ($ergebnis->ok && $listing->status === ListingStatus::Veroeffentlicht) {
-            app(ListingStatusMachine::class)->transition($listing, ListingStatus::Zurueckgezogen);
-        }
-
-        return back()
-            ->with($ergebnis->ok ? 'status' : 'error', $ergebnis->meldung)
-            ->with('warnungen', $ergebnis->warnungen);
     }
 }

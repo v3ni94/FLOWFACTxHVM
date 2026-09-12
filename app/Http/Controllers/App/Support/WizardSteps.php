@@ -11,17 +11,22 @@ namespace App\Http\Controllers\App\Support;
 final class WizardSteps
 {
     /**
+     * Reihenfolge und Titel nach der neuen Schrittfolge
+     * (Masterprompt-Abgleich B.1). Der Abschluss "Prüfen und veröffentlichen"
+     * ist kein Assistentenschritt mehr, sondern eine eigene Seite
+     * (app.listings.review) und wird in der Kopfzeile zusätzlich angezeigt.
+     *
      * @var array<int, string>
      */
     public const array TITEL = [
-        1 => 'Grunddaten',
-        2 => 'Flächen und Ausstattung',
-        3 => 'Energieausweis',
-        4 => 'Preise',
-        5 => 'Bilder',
-        6 => 'Texte',
-        7 => 'Intern',
-        8 => 'Prüfen und Veröffentlichen',
+        1 => 'Vermietung oder Verkauf',
+        2 => 'Adresse und Lage',
+        3 => 'Flächen und Objektdaten',
+        4 => 'Preise und Heizung',
+        5 => 'Ausstattung und Energieausweis',
+        6 => 'Bilder und Unterlagen',
+        7 => 'Überschrift und interne Bezeichnung',
+        8 => 'Beschreibungen',
     ];
 
     public const int ERSTER_SCHRITT = 1;
