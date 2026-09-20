@@ -15,10 +15,12 @@ use Illuminate\Http\Client\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
+use Tests\Support\FakesCognitoToken;
 use Tests\TestCase;
 
 final class FlowfactSettingsTest extends TestCase
 {
+    use FakesCognitoToken;
     use RefreshDatabase;
 
     private const string TOKEN = 'SECRET-TOKEN-ABC';
@@ -126,13 +128,14 @@ final class FlowfactSettingsTest extends TestCase
         Carbon::setTestNow('2026-09-11 15:00:00');
         $admin = $this->admin();
         $this->settings()->setSecret('flowfact.api_token', self::TOKEN);
+        $cognitoToken = $this->vorgewaermtesCognitoToken(self::TOKEN);
         Http::fake(['*/user-service/users/currentUser' => Http::response(['id' => 'u1', 'companyId' => 'company-1', 'type' => 'API', 'loginRelatedMailAddress' => 'api@muellerhv.de'])]);
 
         $this->actingAs($admin)->post('/admin/flowfact/verbindung-testen')
             ->assertRedirect(route('admin.flowfact.edit'))
             ->assertSessionHas('status');
 
-        Http::assertSent(fn (Request $r): bool => $r->hasHeader('x-ff-version', '2') && $r->hasHeader('x-ff-api-token', self::TOKEN));
+        Http::assertSent(fn (Request $r): bool => $r->hasHeader('x-ff-version', '2') && $r->hasHeader('cognitoToken', $cognitoToken) && ! $r->hasHeader('x-ff-api-token'));
 
         $ergebnis = $this->settings()->get('flowfact.verbindung_ergebnis');
         self::assertSame('Verbunden als api@muellerhv.de (Typ API), Company company-1.', $ergebnis);
@@ -158,7 +161,7 @@ final class FlowfactSettingsTest extends TestCase
 
         $ergebnis = (string) $this->settings()->get('flowfact.verbindung_ergebnis');
         self::assertStringStartsWith('Fehler:', $ergebnis);
-        self::assertStringContainsString('Token ungültig oder Rechte fehlen', $ergebnis);
+        self::assertStringContainsString('beim Tausch gegen ein Sitzungstoken abgelehnt', $ergebnis);
         self::assertStringNotContainsString(self::TOKEN, $ergebnis);
 
         $this->actingAs($admin)->get('/admin/flowfact')->assertDontSee(self::TOKEN);
@@ -168,6 +171,7 @@ final class FlowfactSettingsTest extends TestCase
     {
         $admin = $this->admin();
         $this->settings()->setSecret('flowfact.api_token', self::TOKEN);
+        $cognitoToken = $this->vorgewaermtesCognitoToken(self::TOKEN);
         Http::fake([
             '*/user-service/users/currentUser' => Http::response(['message' => 'forbidden for '.self::TOKEN], 403),
             '*/schema-service/v2/schemas*' => Http::response([['name' => 'estates']]),
@@ -178,23 +182,25 @@ final class FlowfactSettingsTest extends TestCase
         $response->assertRedirect(route('admin.flowfact.edit'))->assertSessionHas('diagnose');
 
         $diagnose = session('diagnose');
-        self::assertCount(9, $diagnose);
+        // Cognito-Token (Standard) steht jetzt an erster Stelle, davor die vier
+        // ungetauschten Kopfzeilen als Diagnoseoptionen.
+        self::assertCount(10, $diagnose);
         self::assertSame(403, $diagnose[0]['status']);
         self::assertStringNotContainsString(self::TOKEN, json_encode($diagnose, JSON_THROW_ON_ERROR));
         self::assertStringContainsString('forbidden', $diagnose[0]['antwort']);
-        self::assertSame(200, $diagnose[5]['status']);
-        self::assertStringContainsString('estates', $diagnose[5]['antwort']);
+        self::assertSame(200, $diagnose[6]['status']);
+        self::assertStringContainsString('estates', $diagnose[6]['antwort']);
 
-        // Vier Übertragungsformen des Tokens werden probiert, danach gilt wieder der Standard.
+        // Vier ungetauschte Kopfzeilen werden probiert, danach gilt wieder der Standard (Cognito-Token).
         Http::assertSent(fn (Request $r): bool => $r->hasHeader('token', self::TOKEN));
         Http::assertSent(fn (Request $r): bool => $r->hasHeader('Authorization', 'Bearer '.self::TOKEN));
         Http::assertSent(fn (Request $r): bool => $r->hasHeader('x-api-key', self::TOKEN));
-        Http::assertSent(fn (Request $r): bool => $r->url() === 'https://api.production.cloudios.flowfact-prod.cloud/portal-management-service/portals' && $r->hasHeader('x-ff-api-token', self::TOKEN) && ! $r->hasHeader('Authorization'));
+        Http::assertSent(fn (Request $r): bool => $r->url() === 'https://api.production.cloudios.flowfact-prod.cloud/portal-management-service/portals' && $r->hasHeader('cognitoToken', $cognitoToken) && ! $r->hasHeader('Authorization') && ! $r->hasHeader('x-ff-api-token'));
 
         $seite = $this->actingAs($admin)->get('/admin/flowfact');
         $seite->assertOk()->assertSee('Diagnose ausführen')->assertSee('Übertragungsform des Tokens');
 
-        Http::assertSentCount(9);
+        Http::assertSentCount(10);
     }
 
     public function test_uebertragungsform_des_tokens_ist_einstellbar_und_wirkt_auf_aufrufe(): void
@@ -319,6 +325,7 @@ final class FlowfactSettingsTest extends TestCase
     {
         $admin = $this->admin();
         $this->settings()->setSecret('flowfact.api_token', self::TOKEN);
+        $this->vorgewaermtesCognitoToken(self::TOKEN);
         Http::fake([
             '*/schema-service/v2/schemas?*' => Http::response(['entries' => [['name' => 'wohnung_miete', 'captions' => ['de' => 'Wohnung Miete']]], 'totalCount' => 1]),
             '*/schema-service/v2/schemas/wohnung_miete*' => Http::response(['name' => 'wohnung_miete', 'properties' => ['headline' => ['type' => 'TEXT', 'captions' => ['de' => 'Überschrift']]]]),

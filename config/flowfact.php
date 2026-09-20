@@ -28,6 +28,11 @@ return [
     // Zeitlimit für den Binärupload an die vorsignierte URL.
     'upload_timeout' => (int) env('FLOWFACT_UPLOAD_TIMEOUT_SECONDS', 60),
 
+    // Rückfall-Gültigkeitsdauer des Cognito-Tokens (Sekunden), falls sein
+    // exp-Anspruch nicht gelesen werden kann. FLOWFACT nennt "ca. 30 Minuten"
+    // (developers.flowfact.com/api); 25 Minuten lassen Sicherheitsabstand.
+    'cognito_ttl_fallback_seconds' => (int) env('FLOWFACT_COGNITO_TTL_FALLBACK_SECONDS', 1500),
+
     // Lease gegen parallele Übertragungen desselben Objekts (Minuten).
     'lease_minutes' => 3,
 

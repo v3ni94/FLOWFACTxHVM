@@ -16,6 +16,7 @@ use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Tests\Feature\Flowfact\Support\FakeFlowfact;
+use Tests\Support\FakesCognitoToken;
 use Tests\TestCase;
 
 /**
@@ -24,6 +25,7 @@ use Tests\TestCase;
  */
 abstract class FlowfactTestCase extends TestCase
 {
+    use FakesCognitoToken;
     use RefreshDatabase;
 
     protected const string TOKEN = 'SECRET-TOKEN-ABC';
@@ -33,6 +35,13 @@ abstract class FlowfactTestCase extends TestCase
     protected const string SCHEMA_MIETE = 'wohnung_miete';
 
     protected const string SCHEMA_KAUF = 'haus_kauf';
+
+    /**
+     * Von hinterlegeToken() zwischengespeichertes Cognito-Test-Token, damit
+     * Tests den tatsächlich gesendeten Wert prüfen können, ohne ihn selbst
+     * zu erzeugen.
+     */
+    protected ?string $fakeCognitoToken = null;
 
     protected function setUp(): void
     {
@@ -47,9 +56,21 @@ abstract class FlowfactTestCase extends TestCase
         return app(SettingsRepository::class);
     }
 
+    /**
+     * Hinterlegt den Zugangsschlüssel UND wärmt den Cognito-Token-Zwischen-
+     * speicher mit einem gültigen Test-Token vor (Standardform der
+     * Übertragung, siehe TokenHeader::STANDARD). Dadurch lösen gewöhnliche
+     * Tests keinen echten Tausch über admin-token-service aus: kein
+     * zusätzlicher HTTP-Aufruf, kein zusätzlicher transfer_logs-Eintrag,
+     * bestehende Zählungen und "->first()"-Zugriffe bleiben unverändert
+     * gültig. Tests, die den Tausch selbst prüfen wollen, setzen den
+     * Zugangsschlüssel direkt über settings()->setSecret(...) und faken
+     * admin-token-service selbst (siehe CognitoTokenCacheTest).
+     */
     protected function hinterlegeToken(string $token = self::TOKEN): void
     {
         $this->settings()->setSecret(SettingsTokenProvider::TOKEN_KEY, $token);
+        $this->fakeCognitoToken = $this->vorgewaermtesCognitoToken($token);
     }
 
     protected function setzeSchemata(): void

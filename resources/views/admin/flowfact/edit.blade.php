@@ -137,7 +137,7 @@
                                     <option value="{{ $form }}" @selected(old('token_header', $tokenHeader) === $form)>{{ \App\Flowfact\Client\TokenHeader::label($form) }}</option>
                                 @endforeach
                             </select>
-                            <p class="hint">Nur ändern, wenn die Diagnose zeigt, dass FLOWFACT den Schlüssel in einer anderen Kopfzeile erwartet.</p>
+                            <p class="hint">Standard tauscht den Schlüssel automatisch gegen ein Sitzungstoken (admin-token-service). Die anderen Formen senden den Schlüssel ungetauscht und dienen nur der Diagnose an einem Konto, das den Tausch nicht anbietet.</p>
                             @error('token_header')
                                 <p class="error">{{ $message }}</p>
                             @enderror

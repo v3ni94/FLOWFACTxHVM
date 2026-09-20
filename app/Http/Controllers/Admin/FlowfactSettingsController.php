@@ -117,11 +117,12 @@ class FlowfactSettingsController extends Controller
     }
 
     /**
-     * Diagnose am echten Konto: mehrere lesende Aufrufe mit unterschiedlichen
-     * Kopfzeilen, damit sich bei HTTP 401/403 unterscheiden lässt, ob der
-     * Token, eine Kopfzeile oder eine Berechtigung fehlt. Es wird nichts
-     * geschrieben. Antworten werden gekürzt und bereinigt angezeigt, der
-     * Token erscheint nie.
+     * Diagnose am echten Konto: probiert zuerst den Cognito-Tausch (Standard)
+     * und danach mehrere ungetauschte Kopfzeilen, damit sich bei HTTP 401/403
+     * unterscheiden lässt, ob der Zugangsschlüssel, der Tausch, eine
+     * Kopfzeile oder eine Berechtigung fehlt. Es wird nichts geschrieben.
+     * Antworten werden gekürzt und bereinigt angezeigt, der Token erscheint
+     * nie.
      */
     public function diagnose(SettingsRepository $settings, FlowfactClient $client, TokenScrubber $scrubber): RedirectResponse
     {

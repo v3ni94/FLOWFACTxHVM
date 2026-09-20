@@ -21,13 +21,15 @@ use Illuminate\Http\Client\Response;
 /**
  * HTTP-Zugriff auf die FLOWFACT-Services (docs/connector.md Abschnitt 2).
  *
- * Basis-URL plus Service-Name plus Pfad; Header x-ff-api-token,
- * Accept-Language de, Accept application/json, optional x-ff-company-id und
- * x-ff-version (nur wo dokumentiert). Jeder Aufruf wird über den
- * TransferLogRecorder protokolliert. Wiederholt wird ausschließlich ein
- * lesender GET einmal bei 5xx oder Zeitüberschreitung; schreibende Aufrufe
- * nie, weil eine Wiederholung eine zweite Entität erzeugen könnte. Diese
- * Wiederholung übernimmt der idempotente Ablauf auf Job-Ebene.
+ * Basis-URL plus Service-Name plus Pfad; standardmäßig wird der hinterlegte
+ * Zugangsschlüssel zuerst über CognitoTokenCache gegen ein Sitzungstoken
+ * getauscht und als Kopfzeile cognitoToken gesendet (flowfact-api.md
+ * Abschnitt 3.4). Dazu Accept-Language de, Accept application/json, optional
+ * x-ff-company-id und x-ff-version (nur wo dokumentiert). Jeder Aufruf wird
+ * über den TransferLogRecorder protokolliert. Wiederholt wird ausschließlich
+ * ein lesender GET einmal bei 5xx oder Zeitüberschreitung; schreibende
+ * Aufrufe nie, weil eine Wiederholung eine zweite Entität erzeugen könnte.
+ * Diese Wiederholung übernimmt der idempotente Ablauf auf Job-Ebene.
  */
 final class FlowfactClient
 {
@@ -45,6 +47,7 @@ final class FlowfactClient
         private readonly TokenProvider $tokenProvider,
         private readonly TransferLogRecorder $recorder,
         private readonly TokenScrubber $scrubber,
+        private readonly CognitoTokenCache $cognitoTokenCache,
         private readonly string $baseUrl,
         private readonly int $timeoutSeconds = 20,
         private readonly int $uploadTimeoutSeconds = 60,
@@ -176,10 +179,24 @@ final class FlowfactClient
      */
     private function request(string $method, string $service, string $pathTemplate, array $pathParams, mixed $body, array $query, array $headers): mixed
     {
-        $token = $this->tokenProvider->token();
+        $this->lastStatus = null;
 
-        if ($token === null) {
+        $zugangsschluessel = $this->tokenProvider->token();
+
+        if ($zugangsschluessel === null) {
             throw new AuthenticationException('Kein FLOWFACT-Token hinterlegt.');
+        }
+
+        $form = $this->tokenHeaderOverride ?? $this->tokenProvider->tokenHeader();
+
+        try {
+            $token = $form === TokenHeader::COGNITO_TOKEN
+                ? $this->cognitoTokenCache->token($zugangsschluessel)
+                : $zugangsschluessel;
+        } catch (FlowfactException $exception) {
+            $this->lastStatus = $exception->httpStatus;
+
+            throw $exception;
         }
 
         $url = rtrim($this->baseUrl, '/').'/'.trim($service, '/').$this->fillPath($pathTemplate, $pathParams);
@@ -190,7 +207,7 @@ final class FlowfactClient
             $start = hrtime(true);
 
             try {
-                $response = $this->pending($token, $headers)->send($method, $url, $this->options($body, $query));
+                $response = $this->pending($token, $form, $headers)->send($method, $url, $this->options($body, $query));
             } catch (ConnectionException $exception) {
                 $meldung = (string) $this->scrubber->scrub($exception->getMessage());
                 $this->recorder->record($aktion, $method, $url, $body, null, null, $this->dauer($start), false, 'Verbindungsfehler oder Zeitüberschreitung', $this->listing, $this->user, $meldung);
@@ -220,9 +237,9 @@ final class FlowfactClient
     /**
      * @param  array<string, string>  $headers
      */
-    private function pending(string $token, array $headers): PendingRequest
+    private function pending(string $token, string $form, array $headers): PendingRequest
     {
-        $standard = TokenHeader::headers($this->tokenHeaderOverride ?? $this->tokenProvider->tokenHeader(), $token) + [
+        $standard = TokenHeader::headers($form, $token) + [
             'Accept-Language' => 'de',
             'Accept' => 'application/json',
         ];

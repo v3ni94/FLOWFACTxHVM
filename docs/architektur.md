@@ -85,14 +85,21 @@ Middleware. Jeder Benutzer kann 2FA in seinem Konto aktivieren und deaktivieren.
 ob `two_factor_confirmed_at` gesetzt ist, und verlangt dann den Code. Ein Admin kann den Zweitfaktor eines
 Benutzers zurücksetzen, aber nicht erzwingen. Benutzer ohne 2FA werden nie ausgesperrt.
 
-### ADR-008: API-Token statt Benutzeranmeldung gegenüber FLOWFACT
+### ADR-008: Zugangsschlüssel statt Benutzeranmeldung gegenüber FLOWFACT, automatisch gegen ein Cognito-Token getauscht
 
-Die FLOWFACT-API akzeptiert den Header `x-ff-api-token` (Quelle: offizielles SDK, siehe flowfact-api.md).
-Müller FLOW speichert genau einen Token verschlüsselt in der Tabelle `settings` und sendet ihn nie an den
-Browser, nie in Logs und nie in das Übertragungsprotokoll. Der Cognito-Anmeldeweg mit Benutzerpasswort wird
-nicht implementiert. Ob der Tarif FLOWFACT Essential die Erzeugung eines API-Tokens erlaubt, ist am Konto zu
-prüfen (offene-punkte.md). Ist das nicht der Fall, wird der Cognito-Weg als getrennter Authentifizierungsadapter
-nachgerüstet, ohne dass sich der Rest des Connectors ändert.
+Müller FLOW speichert genau einen Zugangsschlüssel verschlüsselt in der Tabelle `settings` und sendet ihn nie an
+den Browser, nie in Logs und nie in das Übertragungsprotokoll. Erster Kontakt mit dem echten Konto (21.09.2026)
+zeigte, dass dieser Zugangsschlüssel selbst kein Aufruftoken ist: alle Dienste lehnten ihn direkt mit HTTP 403
+ab. developers.flowfact.com/api dokumentiert den vorgesehenen Weg für Drittanwendungen: der Zugangsschlüssel
+("userplatform-token") wird über `GET admin-token-service/public/adminUser/authenticate` gegen ein rund 30
+Minuten gültiges Cognito-Token getauscht, das als Kopfzeile `cognitoToken` alle Dienste authentisiert
+(flowfact-api.md Abschnitt 3.1, 3.3, 3.4). `App\Flowfact\Client\CognitoTokenCache` übernimmt diesen Tausch
+und die Zwischenspeicherung bis kurz vor Ablauf, ohne dass sich der Rest des Connectors ändert: genau der
+getrennte Authentifizierungsadapter, den diese Entscheidung ursprünglich für den Fall vorsah, dass der einfache
+Token-Header nicht ausreicht. Der Cognito-Anmeldeweg mit Benutzername und Passwort (Amplify `signIn`) bleibt
+weiterhin nicht implementiert, er ist für den Connector nicht nötig. Die ungetauschten Kopfzeilenformen aus der
+ersten Fehlersuche bleiben als manuelle Diagnose- und Rückfalloption erhalten (Adminbereich, "Übertragungsform
+des Tokens").
 
 ### ADR-009: KI-Texte über eine Provider-Abstraktion, Modell konfigurierbar, Texte werden gespeichert
 

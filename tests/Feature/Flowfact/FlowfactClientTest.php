@@ -41,7 +41,8 @@ final class FlowfactClientTest extends FlowfactTestCase
 
         Http::assertSent(function (Request $request): bool {
             return $request->url() === self::BASE.'/user-service/users/currentUser'
-                && $request->hasHeader('x-ff-api-token', self::TOKEN)
+                && $request->hasHeader('cognitoToken', $this->fakeCognitoToken)
+                && ! $request->hasHeader('x-ff-api-token')
                 && $request->hasHeader('Accept-Language', 'de')
                 && $request->hasHeader('Accept', 'application/json')
                 && $request->hasHeader('x-ff-version', '2')
@@ -275,6 +276,7 @@ final class FlowfactClientTest extends FlowfactTestCase
             return $request->method() === 'PUT'
                 && $request->hasHeader('Content-Type', 'image/jpeg')
                 && ! $request->hasHeader('x-ff-api-token')
+                && ! $request->hasHeader('cognitoToken')
                 && $request->body() === 'BINAER';
         });
 

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Flowfact;
 
+use App\Flowfact\Client\CognitoTokenCache;
 use App\Flowfact\Client\FlowfactClient;
 use App\Flowfact\Client\SettingsTokenProvider;
 use App\Flowfact\Client\TokenProvider;
@@ -34,11 +35,20 @@ final class FlowfactServiceProvider extends ServiceProvider
             (int) config('flowfact.log_body_limit', 4096),
         ));
 
+        $this->app->bind(CognitoTokenCache::class, fn ($app): CognitoTokenCache => new CognitoTokenCache(
+            $app->make(HttpFactory::class),
+            $app->make(TransferLogRecorder::class),
+            (string) config('flowfact.base_url'),
+            (int) config('flowfact.timeout', 20),
+            (int) config('flowfact.cognito_ttl_fallback_seconds', 1500),
+        ));
+
         $this->app->bind(FlowfactClient::class, fn ($app): FlowfactClient => new FlowfactClient(
             $app->make(HttpFactory::class),
             $app->make(TokenProvider::class),
             $app->make(TransferLogRecorder::class),
             $app->make(TokenScrubber::class),
+            $app->make(CognitoTokenCache::class),
             (string) config('flowfact.base_url'),
             (int) config('flowfact.timeout', 20),
             (int) config('flowfact.upload_timeout', 60),
