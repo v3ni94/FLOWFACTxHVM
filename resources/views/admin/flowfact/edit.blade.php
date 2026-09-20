@@ -66,6 +66,39 @@
                         <button type="submit" class="btn btn-secondary" @disabled(! $tokenHinterlegt)>Verbindung testen</button>
                     </form>
                     <p class="hint">Ruft den aktuellen API-Benutzer ab (user-service). Es werden keine Daten geschrieben.</p>
+
+                    <form method="POST" action="{{ route('admin.flowfact.diagnose') }}">
+                        @csrf
+                        <button type="submit" class="btn btn-secondary" @disabled(! $tokenHinterlegt)>Diagnose ausführen</button>
+                    </form>
+                    <p class="hint">Sechs lesende Aufrufe mit unterschiedlichen Kopfzeilen. Zeigt die Antwort von FLOWFACT gekürzt an, ohne Token.</p>
+
+                    @if (session('diagnose'))
+                        <div class="table-wrap">
+                            <table class="table">
+                                <thead>
+                                    <tr><th>Aufruf</th><th>HTTP</th><th>Antwort</th></tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (session('diagnose') as $zeile)
+                                        <tr>
+                                            <td>{{ $zeile['beschreibung'] }}<br><small>{{ $zeile['aufruf'] }}</small></td>
+                                            <td>
+                                                @if ($zeile['status'] === null)
+                                                    <span class="badge badge-neutral">keine Antwort</span>
+                                                @elseif ($zeile['status'] < 300)
+                                                    <span class="badge badge-success">{{ $zeile['status'] }}</span>
+                                                @else
+                                                    <span class="badge badge-error">{{ $zeile['status'] }}</span>
+                                                @endif
+                                            </td>
+                                            <td><code>{{ $zeile['antwort'] }}</code></td>
+                                        </tr>
+                                    @endforeach
+                                </tbody>
+                            </table>
+                        </div>
+                    @endif
                 </div>
             </div>
         </div>

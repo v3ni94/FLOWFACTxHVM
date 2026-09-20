@@ -6,6 +6,7 @@ namespace App\Http\Controllers\Admin;
 
 use App\Domain\Settings\SettingsRepository;
 use App\Flowfact\Client\Exceptions\FlowfactException;
+use App\Flowfact\Client\FlowfactClient;
 use App\Flowfact\Client\SettingsTokenProvider;
 use App\Flowfact\Client\TokenScrubber;
 use App\Flowfact\Mapping\FieldMappingResolver;
@@ -105,6 +106,58 @@ class FlowfactSettingsController extends Controller
 
         return redirect()->route('admin.flowfact.edit')
             ->with('status', 'Die FLOWFACT-Einstellungen wurden gespeichert.');
+    }
+
+    /**
+     * Diagnose am echten Konto: mehrere lesende Aufrufe mit unterschiedlichen
+     * Kopfzeilen, damit sich bei HTTP 401/403 unterscheiden lässt, ob der
+     * Token, eine Kopfzeile oder eine Berechtigung fehlt. Es wird nichts
+     * geschrieben. Antworten werden gekürzt und bereinigt angezeigt, der
+     * Token erscheint nie.
+     */
+    public function diagnose(SettingsRepository $settings, FlowfactClient $client, TokenScrubber $scrubber): RedirectResponse
+    {
+        if (! $settings->hasSecret(SettingsTokenProvider::TOKEN_KEY)) {
+            return redirect()->route('admin.flowfact.edit')
+                ->with('error', 'Es ist kein API-Token hinterlegt.');
+        }
+
+        $sonden = [
+            ['user-service', '/users/currentUser', [], ['x-ff-version' => '2'], 'Aktueller Benutzer, x-ff-version 2'],
+            ['user-service', '/users/currentUser', [], [], 'Aktueller Benutzer, ohne x-ff-version'],
+            ['schema-service', '/v2/schemas', ['group' => 'estates'], [], 'Schemata der Gruppe estates'],
+            ['schema-service', '/stats', ['groups' => 'true'], [], 'Schema-Statistik'],
+            ['portal-management-service', '/portals', [], [], 'Portale'],
+            ['entity-service', '/schemas/estates/entities', ['size' => '1'], ['x-ff-version' => '2'], 'Objekte (1 Datensatz, x-ff-version 2)'],
+        ];
+
+        $ergebnisse = [];
+
+        foreach ($sonden as [$service, $pfad, $query, $headers, $beschreibung]) {
+            $eintrag = ['beschreibung' => $beschreibung, 'aufruf' => 'GET '.$service.$pfad, 'status' => null, 'antwort' => ''];
+
+            try {
+                $daten = $client->get($service, $pfad, [], $query, $headers);
+                $eintrag['status'] = $client->lastStatus();
+                $eintrag['antwort'] = $this->kurz($scrubber, is_string($daten) ? $daten : json_encode($daten, JSON_UNESCAPED_UNICODE));
+            } catch (FlowfactException $exception) {
+                $eintrag['status'] = $client->lastStatus();
+                $protokoll = TransferLog::query()->latest('id')->first();
+                $antwort = is_array($protokoll?->details) ? (string) ($protokoll->details['response'] ?? '') : '';
+                $eintrag['antwort'] = $this->kurz($scrubber, $antwort !== '' ? $antwort : $exception->getMessage());
+            } catch (Throwable $exception) {
+                $eintrag['antwort'] = $this->kurz($scrubber, $exception->getMessage());
+            }
+
+            $ergebnisse[] = $eintrag;
+        }
+
+        return redirect()->route('admin.flowfact.edit')->with('diagnose', $ergebnisse);
+    }
+
+    private function kurz(TokenScrubber $scrubber, ?string $text): string
+    {
+        return mb_substr(trim((string) $scrubber->scrub($text ?? '')), 0, 400);
     }
 
     /**

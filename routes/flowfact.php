@@ -25,6 +25,7 @@ Route::middleware(['auth', EnsureUserIsActive::class, 'role:admin'])
         Route::delete('/token', [FlowfactSettingsController::class, 'destroyToken'])->name('token.destroy');
         Route::post('/einstellungen', [FlowfactSettingsController::class, 'updateSettings'])->name('settings.update');
         Route::post('/verbindung-testen', [FlowfactSettingsController::class, 'testConnection'])->name('test');
+        Route::post('/diagnose', [FlowfactSettingsController::class, 'diagnose'])->name('diagnose');
         Route::post('/schemata-laden', [FlowfactSettingsController::class, 'loadSchemas'])->name('schemas.load');
         Route::post('/zuordnung', [FlowfactMappingController::class, 'update'])->name('mapping.update');
     });

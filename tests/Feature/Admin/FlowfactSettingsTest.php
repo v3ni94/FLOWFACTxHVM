@@ -164,6 +164,42 @@ final class FlowfactSettingsTest extends TestCase
         $this->actingAs($admin)->get('/admin/flowfact')->assertDontSee(self::TOKEN);
     }
 
+    public function test_diagnose_zeigt_status_und_antwort_je_sonde_ohne_token(): void
+    {
+        $admin = $this->admin();
+        $this->settings()->setSecret('flowfact.api_token', self::TOKEN);
+        Http::fake([
+            '*/user-service/users/currentUser' => Http::response(['message' => 'forbidden for '.self::TOKEN], 403),
+            '*/schema-service/v2/schemas*' => Http::response([['name' => 'estates']]),
+            '*' => Http::response(['message' => 'nope'], 403),
+        ]);
+
+        $response = $this->actingAs($admin)->post('/admin/flowfact/diagnose');
+        $response->assertRedirect(route('admin.flowfact.edit'))->assertSessionHas('diagnose');
+
+        $diagnose = session('diagnose');
+        self::assertCount(6, $diagnose);
+        self::assertSame(403, $diagnose[0]['status']);
+        self::assertStringNotContainsString(self::TOKEN, json_encode($diagnose, JSON_THROW_ON_ERROR));
+        self::assertStringContainsString('forbidden', $diagnose[0]['antwort']);
+        self::assertSame(200, $diagnose[2]['status']);
+        self::assertStringContainsString('estates', $diagnose[2]['antwort']);
+
+        $seite = $this->actingAs($admin)->get('/admin/flowfact');
+        $seite->assertOk()->assertSee('Diagnose ausführen');
+
+        Http::assertSentCount(6);
+    }
+
+    public function test_diagnose_ohne_token_ruft_nichts_auf(): void
+    {
+        Http::fake();
+
+        $this->actingAs($this->admin())->post('/admin/flowfact/diagnose')->assertSessionHas('error');
+
+        Http::assertNothingSent();
+    }
+
     public function test_verbindungstest_ohne_token_liefert_fehlermeldung_ohne_aufruf(): void
     {
         Http::fake();
