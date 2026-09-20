@@ -11,7 +11,7 @@
 </IfModule>
 
 # Bewusst reduziert (Stand 20.09.2026): die vorherige Fassung mit Redirect fuer
-# Schraegstriche, REDIRECT_STATUS-Bedingung und Sperre versteckter Dateien
+# Schraegstriche, Umgebungsbedingung und Sperre versteckter Dateien
 # fuehrte auf IONOS Webhosting zu Fehler 500 (Apache-Fehlerseite, kein
 # Laravel-Eintrag). Kein "Options"-Befehl, IONOS erlaubt ihn nicht.
 # Versteckte Dateien liegen ausserhalb von public/ und sind nicht erreichbar,
