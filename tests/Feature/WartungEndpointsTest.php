@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Feature;
 
+use Illuminate\Support\Facades\Schema;
 use Tests\TestCase;
 
 class WartungEndpointsTest extends TestCase
@@ -116,5 +117,17 @@ class WartungEndpointsTest extends TestCase
 
         $response->assertOk();
         $this->assertArrayHasKey('success', $response->json());
+    }
+
+    public function test_install_endpoint_works_before_first_migration_with_database_cache(): void
+    {
+        config(['deploy.cron_install_token' => 'geheimer-wert', 'cache.default' => 'database']);
+        Schema::dropAllTables();
+
+        $this->get('/wartung/install?token=geheimer-wert')
+            ->assertOk()
+            ->assertJson(['success' => true]);
+
+        $this->assertTrue(Schema::hasTable('cache'));
     }
 }

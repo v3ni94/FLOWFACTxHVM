@@ -18,6 +18,14 @@ return [
     'default' => env('CACHE_STORE', 'database'),
 
     /*
+    | Speicher für die Ratenbegrenzung (throttle-Middleware). Bewusst "file",
+    | damit die Wartungsendpunkte (flow:install über URL) auch vor der ersten
+    | Migration erreichbar sind: der Datenbank-Cache braucht die Tabelle
+    | "cache", die erst flow:install anlegt.
+    */
+    'limiter' => env('CACHE_LIMITER', 'file'),
+
+    /*
     |--------------------------------------------------------------------------
     | Cache Stores
     |--------------------------------------------------------------------------
