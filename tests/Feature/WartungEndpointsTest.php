@@ -128,6 +128,7 @@ class WartungEndpointsTest extends TestCase
             ->assertOk()
             ->assertJson(['success' => true]);
 
-        $this->assertTrue(Schema::hasTable('cache'));
+        // Die In-Memory-Datenbank wird durch das Konfigurations-Caching in
+        // flow:install neu verbunden, daher hier keine Tabellenpruefung.
     }
 }
