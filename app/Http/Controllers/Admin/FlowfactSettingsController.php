@@ -52,6 +52,7 @@ class FlowfactSettingsController extends Controller
         return view('admin.flowfact.edit', [
             'tokenHinterlegt' => $settings->hasSecret(SettingsTokenProvider::TOKEN_KEY),
             'tokenHinterlegtAt' => $this->datum($settings->get(self::TOKEN_HINTERLEGT_AT)),
+            'tokenFormat' => $this->tokenFormat($settings),
             'companyId' => $this->text($settings->get(SettingsTokenProvider::COMPANY_KEY)),
             'tokenHeader' => app(SettingsTokenProvider::class)->tokenHeader(),
             'tokenHeaderFormen' => TokenHeader::alle(),
@@ -165,6 +166,28 @@ class FlowfactSettingsController extends Controller
         $client->usingTokenHeader(null);
 
         return redirect()->route('admin.flowfact.edit')->with('diagnose', $ergebnisse);
+    }
+
+    /**
+     * Formatangabe zum hinterlegten Token ohne dessen Wert: Länge, ob er der
+     * UUID-Form der FLOWFACT-Zugangsschlüssel entspricht und ob er
+     * Leerzeichen oder Zeilenumbrüche enthält (Kopierfehler).
+     *
+     * @return array{laenge: int, uuid: bool, whitespace: bool}|null
+     */
+    private function tokenFormat(SettingsRepository $settings): ?array
+    {
+        $token = $settings->getSecret(SettingsTokenProvider::TOKEN_KEY);
+
+        if (! is_string($token) || $token === '') {
+            return null;
+        }
+
+        return [
+            'laenge' => mb_strlen($token),
+            'uuid' => preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i', trim($token)) === 1,
+            'whitespace' => preg_match('/\s/', $token) === 1,
+        ];
     }
 
     private function kurz(TokenScrubber $scrubber, ?string $text): string

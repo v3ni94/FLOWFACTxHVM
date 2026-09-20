@@ -214,6 +214,18 @@ final class FlowfactSettingsTest extends TestCase
             ->assertSessionHasErrors('token_header');
     }
 
+    public function test_tokenformat_wird_ohne_wert_angezeigt(): void
+    {
+        $admin = $this->admin();
+        $this->settings()->setSecret('flowfact.api_token', '12345678-1234-1234-1234-123456789abc');
+
+        $seite = $this->actingAs($admin)->get('/admin/flowfact');
+        $seite->assertOk()->assertSee('36 Zeichen')->assertSee('ja (36 Zeichen, vier Bindestriche)')->assertDontSee('12345678-1234');
+
+        $this->settings()->setSecret('flowfact.api_token', 'abc');
+        $this->actingAs($admin)->get('/admin/flowfact')->assertSee('3 Zeichen')->assertSee('weicht von der Form');
+    }
+
     public function test_diagnose_ohne_token_ruft_nichts_auf(): void
     {
         Http::fake();

@@ -17,6 +17,18 @@
                             <span class="badge badge-success">Hinterlegt</span>
                             <span>hinterlegt am {{ $tokenHinterlegtAt?->format('d.m.Y H:i') ?? 'unbekannt' }}</span>
                         </div>
+                        @if ($tokenFormat !== null)
+                            <div class="kv">
+                                <dt>Länge</dt>
+                                <dd>{{ $tokenFormat['laenge'] }} Zeichen</dd>
+                                <dt>UUID-Form</dt>
+                                <dd>{{ $tokenFormat['uuid'] ? 'ja (36 Zeichen, vier Bindestriche)' : 'nein, weicht von der Form der FLOWFACT-Zugangsschlüssel ab' }}</dd>
+                                @if ($tokenFormat['whitespace'])
+                                    <dt>Hinweis</dt>
+                                    <dd>Der Token enthält Leerzeichen oder Zeilenumbrüche. Bitte neu kopieren und erneut hinterlegen.</dd>
+                                @endif
+                            </div>
+                        @endif
                         <p class="hint">Der Token wird verschlüsselt gespeichert und aus Sicherheitsgründen nie angezeigt. Zum Austausch geben Sie einen neuen Token ein.</p>
                     @else
                         <div class="alert alert-warning" role="status">Es ist kein API-Token hinterlegt. Übertragungen und Veröffentlichungen sind nicht möglich.</div>
