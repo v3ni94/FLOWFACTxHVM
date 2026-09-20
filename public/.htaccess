@@ -1,33 +1,18 @@
 <IfModule mod_rewrite.c>
-    # Kein "Options"-Befehl: IONOS Webhosting erlaubt ihn in Kundenverzeichnissen
-    # nicht (AllowOverride ohne Options) und antwortet sonst mit Fehler 500.
-
     RewriteEngine On
+    RewriteBase /
 
-    # Handle Authorization Header
     RewriteCond %{HTTP:Authorization} .
     RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
 
-    # Handle X-XSRF-Token Header
-    RewriteCond %{HTTP:x-xsrf-token} .
-    RewriteRule .* - [E=HTTP_X_XSRF_TOKEN:%{HTTP:X-XSRF-Token}]
-
-    # Redirect Trailing Slashes If Not A Folder...
-    # Nur im ersten Durchlauf: nach einer internen Umschreibung aus der
-    # Wurzel-.htaccess (current/public/...) trägt %{REQUEST_URI} bereits den
-    # umgeschriebenen Pfad, ein Redirect würde ihn in die Adressleiste schreiben.
-    RewriteCond %{ENV:REDIRECT_STATUS} ^$
-    RewriteCond %{REQUEST_FILENAME} !-d
-    RewriteCond %{REQUEST_URI} (.+)/$
-    RewriteRule ^ %1 [L,R=301]
-
-    # Send Requests To Front Controller...
     RewriteCond %{REQUEST_FILENAME} !-d
     RewriteCond %{REQUEST_FILENAME} !-f
     RewriteRule ^ index.php [L]
 </IfModule>
 
-# Versteckte Dateien im Webroot werden nie ausgeliefert.
-<IfModule mod_rewrite.c>
-    RewriteRule (^|/)\.(?!well-known/) - [F,L]
-</IfModule>
+# Bewusst reduziert (Stand 20.09.2026): die vorherige Fassung mit Redirect fuer
+# Schraegstriche, REDIRECT_STATUS-Bedingung und Sperre versteckter Dateien
+# fuehrte auf IONOS Webhosting zu Fehler 500 (Apache-Fehlerseite, kein
+# Laravel-Eintrag). Kein "Options"-Befehl, IONOS erlaubt ihn nicht.
+# Versteckte Dateien liegen ausserhalb von public/ und sind nicht erreichbar,
+# solange der Document Root auf public/ zeigt.

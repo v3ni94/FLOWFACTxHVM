@@ -139,9 +139,13 @@ Rolle sind Optionen:
 php current/artisan flow:user:create name@muellerhv.de --name="Vorname Nachname" --role=admin
 ```
 
-Ohne `--password` wird ein Zufallspasswort erzeugt und einmalig ausgegeben (bei IONOS-Cronjobs im Protokoll
-beziehungsweise in der Benachrichtigungsmail). Das Passwort ist bei der ersten Anmeldung zu ändern. Ohne
-Shellzugriff den Befehl als einmaligen Cronjob ausführen und den Cronjob danach löschen.
+Ohne `--password` wird ein Zufallspasswort erzeugt und einmalig ausgegeben. Das Passwort ist bei der ersten
+Anmeldung zu ändern.
+
+**Ohne Shellzugang** (IONOS-Cronjobs nehmen keine Shellbefehle an) legt der Endpunkt
+`https://flowfact.muellerhv.de/wartung/ersteinrichtung?token=<CRON_INSTALL_TOKEN>&email=<adresse>&name=<Name>`
+den ersten Administrator an und gibt das Passwort einmalig als JSON zurück. Er funktioniert nur, solange noch
+kein Benutzer existiert (danach 409), weitere Benutzer werden über Einladungen im Adminbereich angelegt.
 
 ## 10. Betriebsprüfung
 
