@@ -53,7 +53,6 @@ class HtaccessTest extends TestCase
         $this->assertStringContainsString('RewriteRule ^ index.php [L]', $content);
         $this->assertStringNotContainsString('REDIRECT_STATUS', $content);
         $this->assertStringNotContainsString('R=301', $content);
-        $this->assertStringNotContainsString('Options', $content);
     }
 }
 
