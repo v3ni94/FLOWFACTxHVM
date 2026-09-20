@@ -178,17 +178,40 @@ final class FlowfactSettingsTest extends TestCase
         $response->assertRedirect(route('admin.flowfact.edit'))->assertSessionHas('diagnose');
 
         $diagnose = session('diagnose');
-        self::assertCount(6, $diagnose);
+        self::assertCount(9, $diagnose);
         self::assertSame(403, $diagnose[0]['status']);
         self::assertStringNotContainsString(self::TOKEN, json_encode($diagnose, JSON_THROW_ON_ERROR));
         self::assertStringContainsString('forbidden', $diagnose[0]['antwort']);
-        self::assertSame(200, $diagnose[2]['status']);
-        self::assertStringContainsString('estates', $diagnose[2]['antwort']);
+        self::assertSame(200, $diagnose[5]['status']);
+        self::assertStringContainsString('estates', $diagnose[5]['antwort']);
+
+        // Vier Übertragungsformen des Tokens werden probiert, danach gilt wieder der Standard.
+        Http::assertSent(fn (Request $r): bool => $r->hasHeader('token', self::TOKEN));
+        Http::assertSent(fn (Request $r): bool => $r->hasHeader('Authorization', 'Bearer '.self::TOKEN));
+        Http::assertSent(fn (Request $r): bool => $r->hasHeader('x-api-key', self::TOKEN));
+        Http::assertSent(fn (Request $r): bool => $r->url() === 'https://api.production.cloudios.flowfact-prod.cloud/portal-management-service/portals' && $r->hasHeader('x-ff-api-token', self::TOKEN) && ! $r->hasHeader('Authorization'));
 
         $seite = $this->actingAs($admin)->get('/admin/flowfact');
-        $seite->assertOk()->assertSee('Diagnose ausführen');
+        $seite->assertOk()->assertSee('Diagnose ausführen')->assertSee('Übertragungsform des Tokens');
 
-        Http::assertSentCount(6);
+        Http::assertSentCount(9);
+    }
+
+    public function test_uebertragungsform_des_tokens_ist_einstellbar_und_wirkt_auf_aufrufe(): void
+    {
+        $admin = $this->admin();
+        $this->settings()->setSecret('flowfact.api_token', self::TOKEN);
+
+        $this->actingAs($admin)->post('/admin/flowfact/einstellungen', ['token_header' => 'bearer'])
+            ->assertRedirect(route('admin.flowfact.edit'));
+        self::assertSame('bearer', $this->settings()->get('flowfact.token_header'));
+
+        Http::fake(['*' => Http::response(['id' => 'u1', 'companyId' => 'c1', 'type' => 'API'])]);
+        $this->actingAs($admin)->post('/admin/flowfact/verbindung-testen')->assertSessionHas('status');
+        Http::assertSent(fn (Request $r): bool => $r->hasHeader('Authorization', 'Bearer '.self::TOKEN) && ! $r->hasHeader('x-ff-api-token'));
+
+        $this->actingAs($admin)->post('/admin/flowfact/einstellungen', ['token_header' => 'unbekannt'])
+            ->assertSessionHasErrors('token_header');
     }
 
     public function test_diagnose_ohne_token_ruft_nichts_auf(): void

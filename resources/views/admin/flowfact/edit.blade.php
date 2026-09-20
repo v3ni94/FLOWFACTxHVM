@@ -71,7 +71,7 @@
                         @csrf
                         <button type="submit" class="btn btn-secondary" @disabled(! $tokenHinterlegt)>Diagnose ausführen</button>
                     </form>
-                    <p class="hint">Sechs lesende Aufrufe mit unterschiedlichen Kopfzeilen. Zeigt die Antwort von FLOWFACT gekürzt an, ohne Token.</p>
+                    <p class="hint">Lesende Aufrufe mit vier Übertragungsformen des Tokens und mehreren Diensten. Zeigt die Antwort von FLOWFACT gekürzt an, ohne Token.</p>
 
                     @if (session('diagnose'))
                         <div class="table-wrap">
@@ -114,6 +114,19 @@
                             <input type="text" id="company_id" name="company_id" value="{{ old('company_id', $companyId) }}">
                             <p class="hint">Nur setzen, wenn die API den Header x-ff-company-id verlangt.</p>
                             @error('company_id')
+                                <p class="error">{{ $message }}</p>
+                            @enderror
+                        </div>
+
+                        <div class="field @error('token_header') has-error @enderror">
+                            <label for="token_header">Übertragungsform des Tokens</label>
+                            <select id="token_header" name="token_header">
+                                @foreach ($tokenHeaderFormen as $form)
+                                    <option value="{{ $form }}" @selected(old('token_header', $tokenHeader) === $form)>{{ \App\Flowfact\Client\TokenHeader::label($form) }}</option>
+                                @endforeach
+                            </select>
+                            <p class="hint">Nur ändern, wenn die Diagnose zeigt, dass FLOWFACT den Schlüssel in einer anderen Kopfzeile erwartet.</p>
+                            @error('token_header')
                                 <p class="error">{{ $message }}</p>
                             @enderror
                         </div>

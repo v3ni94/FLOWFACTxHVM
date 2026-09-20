@@ -37,6 +37,9 @@ final class FlowfactClient
 
     private ?int $lastStatus = null;
 
+    /** Nur für die Diagnose: erzwingt eine bestimmte Übertragungsform des Tokens. */
+    private ?string $tokenHeaderOverride = null;
+
     public function __construct(
         private readonly HttpFactory $http,
         private readonly TokenProvider $tokenProvider,
@@ -66,6 +69,17 @@ final class FlowfactClient
     public function lastStatus(): ?int
     {
         return $this->lastStatus;
+    }
+
+    /**
+     * Diagnose: nächste Aufrufe mit dieser Übertragungsform des Tokens
+     * (TokenHeader::*), null stellt die konfigurierte Form wieder her.
+     */
+    public function usingTokenHeader(?string $form): self
+    {
+        $this->tokenHeaderOverride = $form;
+
+        return $this;
     }
 
     public function isConfigured(): bool
@@ -208,8 +222,7 @@ final class FlowfactClient
      */
     private function pending(string $token, array $headers): PendingRequest
     {
-        $standard = [
-            'x-ff-api-token' => $token,
+        $standard = TokenHeader::headers($this->tokenHeaderOverride ?? $this->tokenProvider->tokenHeader(), $token) + [
             'Accept-Language' => 'de',
             'Accept' => 'application/json',
         ];

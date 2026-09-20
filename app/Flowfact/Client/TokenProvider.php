@@ -14,4 +14,9 @@ interface TokenProvider
     public function token(): ?string;
 
     public function companyId(): ?string;
+
+    /**
+     * Übertragungsform des Tokens, einer der Werte aus TokenHeader.
+     */
+    public function tokenHeader(): string;
 }

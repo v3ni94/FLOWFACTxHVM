@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Http\Requests\Admin;
 
+use App\Flowfact\Client\TokenHeader;
 use App\Flowfact\Sync\ListingSyncService;
 use App\Http\Controllers\Admin\FlowfactSettingsController;
 use Illuminate\Foundation\Http\FormRequest;
@@ -23,6 +24,7 @@ class FlowfactSettingsRequest extends FormRequest
     {
         return [
             'company_id' => ['nullable', 'string', 'max:100', 'regex:/^[A-Za-z0-9\-_.]*$/'],
+            'token_header' => ['nullable', 'string', Rule::in(TokenHeader::alle())],
             'schema_miete' => ['nullable', 'string', 'max:150', 'regex:/^[A-Za-z0-9\-_.]*$/'],
             'schema_kauf' => ['nullable', 'string', 'max:150', 'regex:/^[A-Za-z0-9\-_.]*$/'],
             // Prüfbericht 2026-09-12, Befund 14
@@ -37,6 +39,7 @@ class FlowfactSettingsRequest extends FormRequest
     public function messages(): array
     {
         return [
+            'token_header.in' => 'Unbekannte Übertragungsform des Tokens.',
             'company_id.regex' => 'Die Company-ID darf nur Buchstaben, Ziffern, Bindestrich, Unterstrich und Punkt enthalten.',
             'schema_miete.regex' => 'Der Schemaname darf nur Buchstaben, Ziffern, Bindestrich, Unterstrich und Punkt enthalten.',
             'schema_kauf.regex' => 'Der Schemaname darf nur Buchstaben, Ziffern, Bindestrich, Unterstrich und Punkt enthalten.',

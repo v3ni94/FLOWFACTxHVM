@@ -8,6 +8,7 @@ use App\Domain\Settings\SettingsRepository;
 use App\Flowfact\Client\Exceptions\FlowfactException;
 use App\Flowfact\Client\FlowfactClient;
 use App\Flowfact\Client\SettingsTokenProvider;
+use App\Flowfact\Client\TokenHeader;
 use App\Flowfact\Client\TokenScrubber;
 use App\Flowfact\Mapping\FieldMappingResolver;
 use App\Flowfact\Services\SchemaService;
@@ -52,6 +53,8 @@ class FlowfactSettingsController extends Controller
             'tokenHinterlegt' => $settings->hasSecret(SettingsTokenProvider::TOKEN_KEY),
             'tokenHinterlegtAt' => $this->datum($settings->get(self::TOKEN_HINTERLEGT_AT)),
             'companyId' => $this->text($settings->get(SettingsTokenProvider::COMPANY_KEY)),
+            'tokenHeader' => app(SettingsTokenProvider::class)->tokenHeader(),
+            'tokenHeaderFormen' => TokenHeader::alle(),
             'schemaMiete' => $schemaMiete,
             'schemaKauf' => $schemaKauf,
             'schemata' => $this->liste($settings->get(self::SCHEMATA)),
@@ -91,6 +94,10 @@ class FlowfactSettingsController extends Controller
     public function updateSettings(FlowfactSettingsRequest $request, SettingsRepository $settings): RedirectResponse
     {
         $this->setzeOderVergesse($settings, SettingsTokenProvider::COMPANY_KEY, $request->input('company_id'));
+
+        if ($request->filled('token_header')) {
+            $settings->set(SettingsTokenProvider::HEADER_KEY, $request->string('token_header')->value());
+        }
         $this->setzeOderVergesse($settings, ListingSyncService::SCHEMA_MIETE, $request->input('schema_miete'));
         $this->setzeOderVergesse($settings, ListingSyncService::SCHEMA_KAUF, $request->input('schema_kauf'));
 
@@ -122,22 +129,25 @@ class FlowfactSettingsController extends Controller
                 ->with('error', 'Es ist kein API-Token hinterlegt.');
         }
 
-        $sonden = [
-            ['user-service', '/users/currentUser', [], ['x-ff-version' => '2'], 'Aktueller Benutzer, x-ff-version 2'],
-            ['user-service', '/users/currentUser', [], [], 'Aktueller Benutzer, ohne x-ff-version'],
-            ['schema-service', '/v2/schemas', ['group' => 'estates'], [], 'Schemata der Gruppe estates'],
-            ['schema-service', '/stats', ['groups' => 'true'], [], 'Schema-Statistik'],
-            ['portal-management-service', '/portals', [], [], 'Portale'],
-            ['entity-service', '/schemas/estates/entities', ['size' => '1'], ['x-ff-version' => '2'], 'Objekte (1 Datensatz, x-ff-version 2)'],
-        ];
+        $sonden = [];
+
+        foreach (TokenHeader::alle() as $form) {
+            $sonden[] = ['user-service', '/users/currentUser', [], ['x-ff-version' => '2'], 'Aktueller Benutzer, '.TokenHeader::label($form), $form];
+        }
+
+        $sonden[] = ['user-service', '/users/currentUser', [], [], 'Aktueller Benutzer, ohne x-ff-version', null];
+        $sonden[] = ['schema-service', '/v2/schemas', ['group' => 'estates'], [], 'Schemata der Gruppe estates', null];
+        $sonden[] = ['schema-service', '/stats', ['groups' => 'true'], [], 'Schema-Statistik', null];
+        $sonden[] = ['portal-management-service', '/portals', [], [], 'Portale', null];
+        $sonden[] = ['entity-service', '/schemas/estates/entities', ['size' => '1'], ['x-ff-version' => '2'], 'Objekte (1 Datensatz, x-ff-version 2)', null];
 
         $ergebnisse = [];
 
-        foreach ($sonden as [$service, $pfad, $query, $headers, $beschreibung]) {
+        foreach ($sonden as [$service, $pfad, $query, $headers, $beschreibung, $form]) {
             $eintrag = ['beschreibung' => $beschreibung, 'aufruf' => 'GET '.$service.$pfad, 'status' => null, 'antwort' => ''];
 
             try {
-                $daten = $client->get($service, $pfad, [], $query, $headers);
+                $daten = $client->usingTokenHeader($form)->get($service, $pfad, [], $query, $headers);
                 $eintrag['status'] = $client->lastStatus();
                 $eintrag['antwort'] = $this->kurz($scrubber, is_string($daten) ? $daten : json_encode($daten, JSON_UNESCAPED_UNICODE));
             } catch (FlowfactException $exception) {
@@ -151,6 +161,8 @@ class FlowfactSettingsController extends Controller
 
             $ergebnisse[] = $eintrag;
         }
+
+        $client->usingTokenHeader(null);
 
         return redirect()->route('admin.flowfact.edit')->with('diagnose', $ergebnisse);
     }

@@ -839,6 +839,7 @@ Nicht aus dem SDK belegbar. Vor Produktivsetzung mit einem Testkonto klären und
 **Zugang und Token**
 
 1. Wie ein API-Token in der FLOWFACT-Oberfläche erzeugt wird (Menüpfad, Berechtigung). Das SDK zeigt nur die Endpunkte aus 3.4, nicht die UI.
+   Stand 21.09.2026: Erzeugt unter apps.flowfact.com, Einstellungen, API-Zugänge (Tools & Integration, Integration). Der Zugangsschlüssel hat UUID-Form. Erster Kontakt vom Konto der Hausverwaltung Müller GmbH: alle Dienste antworten mit HTTP 403 `Credentials invalid`, sowohl mit `x-ff-api-token` als auch ohne `x-ff-version`. Die Diagnose im Adminbereich probiert seitdem zusätzlich die Kopfzeilen `token`, `Authorization: Bearer` und `x-api-key` (App\Flowfact\Client\TokenHeader); die Übertragungsform ist im Adminbereich einstellbar. Ergebnis noch offen.
 2. Ob der Header `x-ff-api-token` extern für alle benötigten Services akzeptiert wird (Entity, Schema, Multimedia, Portal-Management, Search) oder nur für eine Teilmenge.
 3. Ob zusätzlich `x-ff-company-id` erforderlich ist, wenn ein API-Benutzer nur einer Company angehört.
 4. Laufzeit und Widerruf des API-Tokens; das SDK kennt nur `active`, `created`, `lastLogin`. Quelle: src/service/UserService/UserService.Types.d.ts:78-85
