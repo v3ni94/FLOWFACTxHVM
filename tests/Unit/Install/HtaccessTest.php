@@ -43,11 +43,17 @@ class HtaccessTest extends TestCase
         $this->assertDoesNotMatchRegularExpression('/^\s*Options\b/mi', $content);
     }
 
-    public function test_public_htaccess_blocks_hidden_files(): void
+    public function test_public_htaccess_is_reduced_to_the_ionos_verified_rules(): void
     {
+        // Stand 20.09.2026: Redirects, REDIRECT_STATUS-Bedingung und die Sperre
+        // versteckter Dateien fuehrten auf IONOS zu Fehler 500. Die Sperre ist
+        // entbehrlich, weil versteckte Dateien ausserhalb von public/ liegen.
         $content = file_get_contents(base_path_for_test('public/.htaccess'));
 
-        $this->assertMatchesRegularExpression('/RewriteRule\s+\(\^\|\/\)\\\\\./', $content);
+        $this->assertStringContainsString('RewriteRule ^ index.php [L]', $content);
+        $this->assertStringNotContainsString('REDIRECT_STATUS', $content);
+        $this->assertStringNotContainsString('R=301', $content);
+        $this->assertStringNotContainsString('Options', $content);
     }
 }
 
