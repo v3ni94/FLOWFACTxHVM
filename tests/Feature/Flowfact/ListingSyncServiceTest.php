@@ -407,18 +407,42 @@ final class ListingSyncServiceTest extends FlowfactTestCase
         Http::assertNothingSent();
     }
 
+    /**
+     * Kundenwunsch 21.09.2026: Ohne ein je Objekt gewähltes FLOWFACT-Schema
+     * gilt das Objekt seit CompletenessCheck als unvollständig und wird gar
+     * nicht erst übertragen; die frühere Rückfall-Meldung anhand der
+     * globalen Einstellung greift nur noch für Altobjekte ohne dieses Feld.
+     */
     public function test_fehlendes_schema_ist_ein_konfigurationsfehler_ohne_api_aufruf(): void
     {
         $this->settings()->forget(ListingSyncService::SCHEMA_MIETE);
         Http::fake();
         $listing = $this->listingOhneBilder();
+        $listing->update(['flowfact_schema' => null]);
 
         $ergebnis = $this->service()->sync($listing);
 
         self::assertFalse($ergebnis->ok);
-        self::assertStringContainsString('Kein FLOWFACT-Schema für Miete', $ergebnis->meldung);
+        self::assertStringContainsString('FLOWFACT-Schema', $ergebnis->meldung);
         self::assertSame(SyncStatus::Fehlgeschlagen, $listing->flowfactLink()->first()->sync_status);
         Http::assertNothingSent();
+    }
+
+    /**
+     * Rückfall für Objekte, die vor der Einführung des je-Objekt-Schemas
+     * angelegt wurden: CompletenessCheck würde ohne eigenes Feld blockieren,
+     * daher direkt gegen schemaFuer() geprüft statt über sync().
+     */
+    public function test_schemafuer_greift_ohne_eigenes_feld_auf_die_globale_einstellung_zurueck(): void
+    {
+        $listing = $this->listingOhneBilder();
+        $listing->update(['flowfact_schema' => null]);
+
+        self::assertSame(self::SCHEMA_MIETE, $this->service()->schemaFuer($listing->fresh()));
+
+        $this->settings()->forget(ListingSyncService::SCHEMA_MIETE);
+
+        self::assertNull($this->service()->schemaFuer($listing->fresh()));
     }
 
     public function test_auth_fehler_ohne_wiederholung_mit_dokumentierter_meldung(): void

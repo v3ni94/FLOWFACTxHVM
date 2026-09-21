@@ -40,6 +40,7 @@ class Step1VermarktungRequest extends FormRequest
         return [
             'vermarktungsart' => ['required', Rule::enum(Vermarktungsart::class)],
             'objektart' => ['required', Rule::enum(Objektart::class)],
+            'flowfact_schema' => ['nullable', 'string', 'max:150'],
             'gewerbe_unterart' => [
                 $this->input('objektart') === Objektart::Gewerbe->value ? 'required' : 'nullable',
                 Rule::enum(GewerbeUnterart::class),
@@ -66,6 +67,7 @@ class Step1VermarktungRequest extends FormRequest
         return [
             'vermarktungsart' => ['sometimes', 'nullable', Rule::enum(Vermarktungsart::class)],
             'objektart' => ['sometimes', 'nullable', Rule::enum(Objektart::class)],
+            'flowfact_schema' => ['sometimes', 'nullable', 'string', 'max:150'],
             'gewerbe_unterart' => ['sometimes', 'nullable', Rule::enum(GewerbeUnterart::class)],
             'bearbeiter_user_id' => ['sometimes', 'nullable', self::bearbeiterRegel()],
             'ansprechpartner_user_id' => ['sometimes', 'nullable', 'exists:users,id'],

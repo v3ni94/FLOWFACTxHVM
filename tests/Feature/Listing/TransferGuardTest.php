@@ -64,7 +64,7 @@ final class TransferGuardTest extends TestCase
     {
         Http::fake();
         $user = User::factory()->admin()->create();
-        $listing = Listing::factory()->miete()->vollstaendig()->create(['status' => ListingStatus::Bereit]);
+        $listing = Listing::factory()->miete()->vollstaendig()->create(['status' => ListingStatus::Bereit, 'flowfact_schema' => null]);
         app(SettingsRepository::class)->setSecret(SettingsTokenProvider::TOKEN_KEY, 'test-token');
         // Bewusst kein Schema hinterlegt: die Übertragung scheitert, ohne
         // FLOWFACT tatsächlich zu kontaktieren (kein HTTP-Aufruf).

@@ -33,6 +33,22 @@
                 </div>
 
                 <div class="stack">
+                    <p class="eyebrow">FLOWFACT-Schema</p>
+                    @if ($schemata === [])
+                        <p class="hint">Es sind noch keine FLOWFACT-Schemata geladen. Bitte im Adminbereich unter FLOWFACT auf "Schemata laden" klicken, danach hier auswählen.</p>
+                    @else
+                        <x-flow.feld
+                            name="flowfact_schema"
+                            label="Passendes Schema bei FLOWFACT"
+                            type="select"
+                            :value="$listing->flowfact_schema"
+                            :options="['' => 'Bitte wählen'] + collect($schemata)->pluck('caption', 'name')->all()"
+                        />
+                        <p class="hint">Welches Schema passt am besten zum Objekt und zu Miete oder Kauf? Die Liste stammt aus FLOWFACT (Adminbereich, "Schemata laden").</p>
+                    @endif
+                </div>
+
+                <div class="stack">
                     <p class="eyebrow">Objektart</p>
                     <div class="kachel-grid">
                         @foreach (\App\Enums\Objektart::options() as $wert => $label)

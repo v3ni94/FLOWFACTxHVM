@@ -55,9 +55,9 @@ final class Regression03SchemawechselTest extends FlowfactTestCase
     {
         $listing = $this->uebertragenesMietobjekt();
 
-        // Schritt 1 des Assistenten: Vermarktungsart auf Kauf, Schritt 4 mit Kaufpreis gespeichert,
-        // danach erneut freigegeben (die Freigabeversion trägt jetzt Kauf, B.6).
-        $listing->update(['vermarktungsart' => Vermarktungsart::Kauf]);
+        // Schritt 1 des Assistenten: Vermarktungsart und Schema auf Kauf, Schritt 4 mit
+        // Kaufpreis gespeichert, danach erneut freigegeben (die Freigabeversion trägt jetzt Kauf, B.6).
+        $listing->update(['vermarktungsart' => Vermarktungsart::Kauf, 'flowfact_schema' => self::SCHEMA_KAUF]);
         $listing->price()->update(['kaufpreis_cent' => 24_900_000]);
         $listing = $listing->fresh(['price', 'energy', 'media']);
         $this->freigeben($listing, []);

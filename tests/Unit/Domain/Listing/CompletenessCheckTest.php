@@ -54,6 +54,20 @@ final class CompletenessCheckTest extends TestCase
         $this->assertArrayNotHasKey('heizkosten_versorgung', $ergebnis->fehlend);
     }
 
+    /**
+     * Kundenwunsch 21.09.2026: ohne ein je Objekt gewähltes FLOWFACT-Schema
+     * gilt das Objekt als unvollständig und wird nicht übertragen.
+     */
+    public function test_ein_fehlendes_flowfact_schema_blockiert(): void
+    {
+        $listing = Listing::factory()->vollstaendig()->create(['flowfact_schema' => null]);
+
+        $ergebnis = app(CompletenessCheck::class)->check($listing->fresh(['price', 'energy', 'media']));
+
+        $this->assertFalse($ergebnis->istVollstaendig());
+        $this->assertArrayHasKey('flowfact_schema', $ergebnis->fehlend);
+    }
+
     public function test_ein_vollstaendiges_objekt_besteht_die_pruefung(): void
     {
         $listing = Listing::factory()->vollstaendig()->create();

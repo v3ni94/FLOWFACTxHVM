@@ -58,13 +58,15 @@ Vermarktungs- und Objektart bestimmen, welche Preisfelder Pflicht sind.
 | objektnummer | string, unique | ja | Lesbare Nummer, Format MF-JJJJ-NNNN, automatisch vergeben |
 | vermarktungsart | enum: miete, kauf | ja | |
 | objektart | enum: wohnung, haus, gewerbe, stellplatz, grundstueck | ja | |
+| flowfact_schema | string(150), nullable | ja vor Übertragung | Je Objekt in Schritt 1 aus den geladenen FLOWFACT-Schemata gewählt (seit 21.09.2026), Vorrang vor flowfact.schema_miete/schema_kauf |
 | titel | string(100) | ja vor Veröffentlichung | Portale begrenzen Titel, 100 Zeichen ist sicher |
 | strasse | string | ja | |
 | hausnummer | string | ja | |
 | plz | string(5) | ja | |
 | ort | string | ja | |
 | land | string(2) | ja | Standard DE |
-| adresse_im_inserat_anzeigen | bool | | Standard ja. Bei nein wird nur PLZ und Ort übertragen |
+| adress_freigabe | enum: vollstaendig, nur_plz_ort | | Voreinstellung bei Anlage: vollstaendig bei Vermietung, nur_plz_ort bei Verkauf (seit 21.09.2026), in Schritt 2 änderbar |
+| adresse_im_inserat_anzeigen | bool | | Abgeleitetes Feld aus adress_freigabe. Bei nein wird nur PLZ und Ort übertragen |
 | wohnflaeche_qm | decimal(8,2), nullable | ja bei wohnung, haus | |
 | nutzflaeche_qm | decimal(8,2), nullable | ja bei gewerbe | |
 | grundstuecksflaeche_qm | decimal(10,2), nullable | ja bei haus, grundstueck | |
@@ -215,7 +217,7 @@ Alle Beträge in Cent, nullable wo nicht anwendbar.
 | flowfact.api_token | Verschlüsselt. Nur Admin. Wird nie protokolliert oder angezeigt, nur "hinterlegt am". |
 | flowfact.company_id | Optional, falls die API es verlangt |
 | flowfact.stage | production oder development |
-| flowfact.schema_miete, flowfact.schema_kauf | Schemanamen der Zielentität |
+| flowfact.schema_miete, flowfact.schema_kauf | Rückfall-Schemanamen für Objekte ohne eigene Auswahl (Altobjekte). Seit 21.09.2026 wählt der Bearbeiter das Schema je Objekt in Schritt 1 (`listings.flowfact_schema`); dieses Feld hat Vorrang. |
 | ki.provider, ki.modell | Konfigurierbares Modell für Objektbeschreibungen |
 | firma.* | Firmendaten für das Inserat (Name, Anschrift, Telefon, E-Mail) |
 

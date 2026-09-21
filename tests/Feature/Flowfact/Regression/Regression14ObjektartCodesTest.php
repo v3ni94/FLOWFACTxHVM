@@ -149,7 +149,7 @@ final class Regression14ObjektartCodesTest extends FlowfactTestCase
     public function test_stellplatz_mit_hinterlegtem_code_wird_uebertragen(): void
     {
         $this->settings()->set(FieldMappingResolver::CODEZUORDNUNG, ['objektart.stellplatz' => '09STELL']);
-        $listing = Listing::factory()->miete()->stellplatz()->vollstaendig()->create(['status' => ListingStatus::Bereit]);
+        $listing = Listing::factory()->miete()->stellplatz()->vollstaendig()->create(['status' => ListingStatus::Bereit, 'flowfact_schema' => self::SCHEMA_MIETE]);
         $listing->media()->update(['flowfact_multimedia_id' => '101', 'flowfact_titel' => 'Titelbild']);
         $listing = $listing->fresh(['price', 'energy', 'media']);
         $this->freigeben($listing, []);

@@ -330,11 +330,20 @@ final class ListingSyncService
     }
 
     /**
-     * Schema aus den Einstellungen; die Vermarktungsart stammt aus der
-     * Freigabeversion, sofern vorhanden, sonst aus dem Live-Stand.
+     * Schema: vorrangig das je Objekt in Schritt 1 gewählte
+     * (Kundenwunsch 21.09.2026), ersatzweise die globale Einstellung für
+     * Objekte, die vor dieser Auswahl angelegt wurden. Die Vermarktungsart für
+     * den Rückfall stammt aus der Freigabeversion, sofern vorhanden, sonst aus
+     * dem Live-Stand.
      */
     public function schemaFuer(Listing $listing, ?ListingSnapshot $snapshot = null): ?string
     {
+        $gewaehlt = $listing->flowfact_schema;
+
+        if (is_string($gewaehlt) && trim($gewaehlt) !== '') {
+            return trim($gewaehlt);
+        }
+
         $schema = $this->settings->get($this->istMiete($listing, $snapshot) ? self::SCHEMA_MIETE : self::SCHEMA_KAUF);
 
         return is_string($schema) && trim($schema) !== '' ? trim($schema) : null;

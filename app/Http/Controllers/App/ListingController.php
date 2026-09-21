@@ -8,6 +8,7 @@ use App\Domain\Listing\CompletenessCheck;
 use App\Domain\Listing\IllegalStatusTransitionException;
 use App\Domain\Listing\ListingStatusMachine;
 use App\Domain\Listing\PublishableFields;
+use App\Enums\AdressFreigabe;
 use App\Enums\ListingStatus;
 use App\Enums\Nutzungsstatus;
 use App\Enums\Objektart;
@@ -100,11 +101,19 @@ class ListingController extends Controller
 
     public function store(CreateListingRequest $request): RedirectResponse
     {
+        $vermarktungsart = Vermarktungsart::from($request->string('vermarktungsart')->value());
+
         $listing = Listing::create([
-            'vermarktungsart' => Vermarktungsart::from($request->string('vermarktungsart')->value()),
+            'vermarktungsart' => $vermarktungsart,
             'objektart' => Objektart::from($request->string('objektart')->value()),
             'land' => 'DE',
-            'adresse_im_inserat_anzeigen' => true,
+            // Voreinstellung Adressfreigabe (Kundenwunsch 21.09.2026): bei
+            // Vermietung ist die vollständige Adresse im Inserat üblich, bei
+            // Verkauf wird sie zum Schutz vor Direktkontakten voreingestellt
+            // eingeschränkt. Im Schritt Adresse und Lage änderbar.
+            'adress_freigabe' => $vermarktungsart === Vermarktungsart::Miete
+                ? AdressFreigabe::Vollstaendig
+                : AdressFreigabe::NurPlzOrt,
             'status' => ListingStatus::Entwurf,
             'erstellt_von_user_id' => $request->user()->id,
             'bearbeiter_user_id' => $request->user()->id,

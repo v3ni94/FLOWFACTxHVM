@@ -103,6 +103,10 @@ final class CompletenessCheck
             $befunde[] = Befund::blockierend('ansprechpartner_user_id', 'Ansprechpartner', 1);
         }
 
+        if ($listing->flowfact_schema === null) {
+            $befunde[] = Befund::blockierend('flowfact_schema', 'FLOWFACT-Schema', 1, null, PruefEbene::Flowfact);
+        }
+
         if ($listing->verfuegbar_ab_typ === null) {
             $befunde[] = Befund::blockierend('verfuegbar_ab_typ', 'Verfügbarkeit', 1);
         } elseif ($listing->verfuegbar_ab_typ === VerfuegbarAbTyp::Datum && $listing->verfuegbar_ab_datum === null) {

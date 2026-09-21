@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Feature\Listing;
 
+use App\Enums\AdressFreigabe;
 use App\Enums\ListingStatus;
 use App\Enums\Objektart;
 use App\Enums\Vermarktungsart;
@@ -131,6 +132,31 @@ final class ListingIndexAndCreateTest extends TestCase
         $this->assertMatchesRegularExpression('/^MF-\d{4}-\d{4}$/', $listing->objektnummer);
 
         $response->assertRedirect(route('app.listings.step', ['listing' => $listing, 'schritt' => 1]));
+    }
+
+    /**
+     * Kundenwunsch 21.09.2026: bei Vermietung ist die Adresse voreingestellt
+     * vollständig sichtbar, bei Verkauf voreingestellt eingeschränkt.
+     */
+    public function test_die_adressfreigabe_wird_nach_vermarktungsart_voreingestellt(): void
+    {
+        $user = User::factory()->create();
+
+        $this->actingAs($user)->post(route('app.listings.create'), [
+            'vermarktungsart' => Vermarktungsart::Miete->value,
+            'objektart' => Objektart::Wohnung->value,
+        ]);
+        $miete = Listing::query()->latest('id')->first();
+        $this->assertSame(AdressFreigabe::Vollstaendig, $miete->adress_freigabe);
+        $this->assertTrue($miete->adresse_im_inserat_anzeigen);
+
+        $this->actingAs($user)->post(route('app.listings.create'), [
+            'vermarktungsart' => Vermarktungsart::Kauf->value,
+            'objektart' => Objektart::Wohnung->value,
+        ]);
+        $kauf = Listing::query()->latest('id')->first();
+        $this->assertSame(AdressFreigabe::NurPlzOrt, $kauf->adress_freigabe);
+        $this->assertFalse($kauf->adresse_im_inserat_anzeigen);
     }
 
     public function test_die_anlage_ohne_vermarktungsart_schlaegt_fehl(): void

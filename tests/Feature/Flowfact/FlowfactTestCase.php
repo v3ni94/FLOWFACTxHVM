@@ -88,6 +88,7 @@ abstract class FlowfactTestCase extends TestCase
     {
         $listing = Listing::factory()->miete()->vollstaendig()->create(array_merge([
             'status' => ListingStatus::Bereit,
+            'flowfact_schema' => self::SCHEMA_MIETE,
         ], $attributes));
 
         return $listing->fresh(['price', 'energy', 'media']);

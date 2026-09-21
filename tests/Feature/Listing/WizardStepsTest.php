@@ -4,7 +4,10 @@ declare(strict_types=1);
 
 namespace Tests\Feature\Listing;
 
+use App\Domain\Settings\SettingsRepository;
+use App\Enums\AdressFreigabe;
 use App\Enums\Objektart;
+use App\Http\Controllers\Admin\FlowfactSettingsController;
 use App\Models\Listing;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -93,6 +96,85 @@ final class WizardStepsTest extends TestCase
 
         $response->assertOk();
         $response->assertSee('wird lokal erfasst, die Übertragung an FLOWFACT ist noch nicht freigegeben');
+    }
+
+    /**
+     * Kundenwunsch 21.09.2026: das FLOWFACT-Schema wird je Objekt in Schritt 1
+     * aus den im Adminbereich geladenen Schemata gewählt.
+     */
+    public function test_schritt_eins_zeigt_geladene_schemata_zur_auswahl_und_speichert_die_wahl(): void
+    {
+        $user = User::factory()->create();
+        $listing = Listing::factory()->create(['bearbeiter_user_id' => $user->id, 'erstellt_von_user_id' => $user->id]);
+
+        app(SettingsRepository::class)->set(FlowfactSettingsController::SCHEMATA, [
+            ['name' => 'wohnung_miete', 'caption' => 'Wohnung Miete'],
+            ['name' => 'haus_kauf', 'caption' => 'Haus Kauf'],
+        ]);
+
+        $anzeige = $this->actingAs($user)->get(route('app.listings.step', ['listing' => $listing, 'schritt' => 1]));
+
+        $anzeige->assertOk();
+        $anzeige->assertSee('Wohnung Miete');
+        $anzeige->assertSee('Haus Kauf');
+
+        $response = $this->actingAs($user)->post(
+            route('app.listings.step.store', ['listing' => $listing, 'schritt' => 1]),
+            [
+                'aktion' => 'weiter',
+                'vermarktungsart' => 'miete',
+                'objektart' => 'wohnung',
+                'flowfact_schema' => 'wohnung_miete',
+                'bearbeiter_user_id' => $user->id,
+                'ansprechpartner_user_id' => $user->id,
+                'verfuegbar_ab_typ' => 'sofort',
+                'nutzungsstatus' => 'leerstehend',
+            ]
+        );
+
+        $response->assertRedirect(route('app.listings.step', ['listing' => $listing, 'schritt' => 2]));
+
+        $listing->refresh();
+        self::assertSame('wohnung_miete', $listing->flowfact_schema);
+    }
+
+    public function test_schritt_eins_ohne_geladene_schemata_zeigt_einen_hinweis(): void
+    {
+        $user = User::factory()->create();
+        $listing = Listing::factory()->create(['bearbeiter_user_id' => $user->id, 'erstellt_von_user_id' => $user->id]);
+
+        $response = $this->actingAs($user)->get(route('app.listings.step', ['listing' => $listing, 'schritt' => 1]));
+
+        $response->assertOk();
+        $response->assertSee('Schemata laden');
+    }
+
+    /**
+     * Kundenwunsch 21.09.2026: ein Wechsel der Vermarktungsart in Schritt 1
+     * setzt die Adressfreigabe neu, eine bereits in Schritt 2 getroffene Wahl
+     * bleibt bei unveränderter Vermarktungsart aber erhalten.
+     */
+    public function test_ein_wechsel_der_vermarktungsart_in_schritt_eins_setzt_die_adressfreigabe_neu(): void
+    {
+        $user = User::factory()->create();
+        $listing = Listing::factory()->kauf()->create([
+            'bearbeiter_user_id' => $user->id,
+            'erstellt_von_user_id' => $user->id,
+            'adress_freigabe' => AdressFreigabe::NurPlzOrt,
+        ]);
+
+        $this->actingAs($user)->post(
+            route('app.listings.step.store', ['listing' => $listing, 'schritt' => 1]),
+            [
+                'aktion' => 'weiter',
+                'vermarktungsart' => 'miete',
+                'objektart' => 'wohnung',
+                'bearbeiter_user_id' => $user->id,
+                'verfuegbar_ab_typ' => 'sofort',
+            ]
+        );
+
+        $this->assertSame(AdressFreigabe::Vollstaendig, $listing->fresh()->adress_freigabe);
     }
 
     public function test_schritt_zwei_speichert_adresse_und_adressfreigabe(): void

@@ -255,6 +255,7 @@ class ListingFactory extends Factory
         return $this->state(fn (array $attributes): array => [
             'beschreibung_objekt' => 'Diese gepflegte Wohnung überzeugt durch einen hellen Zuschnitt und eine ruhige Lage in Erkelenz.',
             'ansprechpartner_user_id' => User::factory(),
+            'flowfact_schema' => 'testschema',
         ])->afterCreating(function (Listing $listing): void {
             $this->erzeugePreise($listing);
             $this->erzeugeEnergieausweis($listing);

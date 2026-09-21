@@ -4,12 +4,15 @@ declare(strict_types=1);
 
 namespace App\Http\Controllers\App\Steps;
 
+use App\Domain\Settings\SettingsRepository;
+use App\Enums\AdressFreigabe;
 use App\Enums\GewerbeUnterart;
 use App\Enums\Nutzungsstatus;
 use App\Enums\Objektart;
 use App\Enums\VerfuegbarAbTyp;
 use App\Enums\Vermarktungsart;
 use App\Flowfact\Mapping\FieldCatalog;
+use App\Http\Controllers\Admin\FlowfactSettingsController;
 use App\Http\Requests\Listing\Step1VermarktungRequest;
 use App\Models\Listing;
 use Illuminate\Http\JsonResponse;
@@ -21,9 +24,17 @@ use Illuminate\View\View;
 
 /**
  * Schritt 1: Vermietung oder Verkauf (Masterprompt-Abgleich B.1 Schritt 1).
+ *
+ * Kundenwunsch 21.09.2026: das FLOWFACT-Zielschema wird hier je Objekt aus
+ * den im Adminbereich geladenen Schemata gewählt (nicht mehr ausschließlich
+ * global), direkt im Anschluss an Vermarktungsart und Objektart.
  */
 final class Schritt1Controller extends AbstractStep implements StepHandler
 {
+    public function __construct(
+        private readonly SettingsRepository $settings,
+    ) {}
+
     protected function schritt(): int
     {
         return 1;
@@ -36,7 +47,46 @@ final class Schritt1Controller extends AbstractStep implements StepHandler
         return view('app.listings.schritte.schritt-1', array_merge($this->headerDaten($listing), [
             'benutzer' => Step1VermarktungRequest::auswaehlbareBenutzer(),
             'objektartHinweis' => $this->objektartHinweis($listing->objektart),
+            'schemata' => $this->schemata(),
         ]));
+    }
+
+    /**
+     * Bei FLOWFACT geladene Schemata (Adminbereich, "Schemata laden"),
+     * sortiert: zuerst Namen oder Beschriftungen mit erkennbarem Bezug zu
+     * Miete, dann zu Kauf, danach alphabetisch die übrigen. Reine
+     * Orientierungshilfe, keine verlässliche Kategorisierung, weil FLOWFACT
+     * die Zuordnung nicht mitliefert (flowfact-api.md Abschnitt 9, Punkt 8).
+     *
+     * @return list<array{name: string, caption: string}>
+     */
+    private function schemata(): array
+    {
+        $wert = $this->settings->get(FlowfactSettingsController::SCHEMATA);
+
+        if (! is_array($wert)) {
+            return [];
+        }
+
+        $schemata = [];
+
+        foreach ($wert as $eintrag) {
+            if (is_array($eintrag) && isset($eintrag['name']) && is_string($eintrag['name'])) {
+                $schemata[] = ['name' => $eintrag['name'], 'caption' => (string) ($eintrag['caption'] ?? $eintrag['name'])];
+            }
+        }
+
+        usort($schemata, function (array $a, array $b): int {
+            $rang = fn (array $s): int => match (true) {
+                (bool) preg_match('/miete|vermiet/i', $s['name'].' '.$s['caption']) => 0,
+                (bool) preg_match('/kauf|verkauf/i', $s['name'].' '.$s['caption']) => 1,
+                default => 2,
+            };
+
+            return $rang($a) <=> $rang($b) ?: $a['caption'] <=> $b['caption'];
+        });
+
+        return $schemata;
     }
 
     public function store(Request $request, Listing $listing): RedirectResponse
@@ -75,7 +125,18 @@ final class Schritt1Controller extends AbstractStep implements StepHandler
         $aenderungen = [];
 
         if (array_key_exists('vermarktungsart', $daten) && $daten['vermarktungsart'] !== null) {
-            $aenderungen['vermarktungsart'] = Vermarktungsart::from($daten['vermarktungsart']);
+            $vermarktungsart = Vermarktungsart::from($daten['vermarktungsart']);
+            $aenderungen['vermarktungsart'] = $vermarktungsart;
+
+            // Voreinstellung Adressfreigabe (Kundenwunsch 21.09.2026): folgt
+            // der Vermarktungsart nur bei einer tatsächlichen Änderung, damit
+            // eine bereits in Schritt 2 getroffene Wahl nicht grundlos
+            // überschrieben wird.
+            if ($listing->vermarktungsart !== $vermarktungsart) {
+                $aenderungen['adress_freigabe'] = $vermarktungsart === Vermarktungsart::Miete
+                    ? AdressFreigabe::Vollstaendig
+                    : AdressFreigabe::NurPlzOrt;
+            }
         }
 
         if (array_key_exists('objektart', $daten) && $daten['objektart'] !== null) {
@@ -86,6 +147,10 @@ final class Schritt1Controller extends AbstractStep implements StepHandler
                 : null;
         } elseif (array_key_exists('gewerbe_unterart', $daten)) {
             $aenderungen['gewerbe_unterart'] = $this->enumOderNull(GewerbeUnterart::class, $daten['gewerbe_unterart']);
+        }
+
+        if (array_key_exists('flowfact_schema', $daten)) {
+            $aenderungen['flowfact_schema'] = $this->leerAlsNull($daten['flowfact_schema']);
         }
 
         if (array_key_exists('bearbeiter_user_id', $daten)) {
