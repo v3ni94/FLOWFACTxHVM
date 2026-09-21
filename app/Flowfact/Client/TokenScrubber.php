@@ -4,13 +4,25 @@ declare(strict_types=1);
 
 namespace App\Flowfact\Client;
 
+use Illuminate\Support\Facades\Cache;
+
 /**
- * Entfernt den API-Token aus beliebigen Texten und Strukturen, bevor sie in
- * Protokoll, Fehlermeldungen oder Oberfläche gelangen (ADR-008).
+ * Entfernt den Zugangsschlüssel UND ein bereits ausgestelltes Cognito-Token
+ * aus beliebigen Texten und Strukturen, bevor sie in Protokoll,
+ * Fehlermeldungen oder Oberfläche gelangen (ADR-008).
  *
- * WARUM: Der Token ist das einzige Geheimnis des Connectors. Er darf weder in
+ * WARUM: Beide sind Geheimnisse des Connectors. Sie dürfen weder in
  * transfer_logs noch in Ausnahmemeldungen auftauchen, die die Oberfläche
- * anzeigt. Alle Ausgaben laufen deshalb durch diese Klasse.
+ * anzeigt (unter anderem `letzter_fehler` auf der Objektseite, für jeden
+ * aktiven Benutzer inklusive der Rolle Leser sichtbar). Alle Ausgaben laufen
+ * deshalb durch diese Klasse.
+ *
+ * Das Cognito-Token wird über CognitoTokenCache::cacheKey() nur GELESEN
+ * (Cache::get, kein Tausch), damit keine Abhängigkeit zu CognitoTokenCache
+ * selbst entsteht: dessen eigener Tauschvorgang protokolliert über
+ * TransferLogRecorder, der wiederum diese Klasse verwendet. Eine
+ * Konstruktor-Abhängigkeit hierher auf CognitoTokenCache würde einen
+ * Kreislauf erzeugen.
  */
 final class TokenScrubber
 {
@@ -26,13 +38,32 @@ final class TokenScrubber
             return null;
         }
 
-        $token = $this->tokenProvider->token();
+        $text = $this->ersetzen($text, $this->tokenProvider->token());
+        $text = $this->ersetzen($text, $this->zwischengespeichertesCognitoToken());
 
-        if ($token === null || $token === '') {
+        return $text;
+    }
+
+    private function ersetzen(string $text, ?string $geheimnis): string
+    {
+        if ($geheimnis === null || $geheimnis === '') {
             return $text;
         }
 
-        return str_replace($token, self::ERSATZ, $text);
+        return str_replace($geheimnis, self::ERSATZ, $text);
+    }
+
+    private function zwischengespeichertesCognitoToken(): ?string
+    {
+        $zugangsschluessel = $this->tokenProvider->token();
+
+        if ($zugangsschluessel === null || $zugangsschluessel === '') {
+            return null;
+        }
+
+        $wert = Cache::get(CognitoTokenCache::cacheKey($zugangsschluessel));
+
+        return is_string($wert) && $wert !== '' ? $wert : null;
     }
 
     /**

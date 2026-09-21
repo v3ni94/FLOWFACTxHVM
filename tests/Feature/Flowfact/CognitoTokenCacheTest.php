@@ -127,6 +127,26 @@ final class CognitoTokenCacheTest extends FlowfactTestCase
         self::assertStringContainsString('Credentials invalid', $log->details['response']);
     }
 
+    /**
+     * Prüfbericht 2026-09-21, Befund mittel: ein aus unserer Sicht bereits
+     * abgelaufenes Token (Uhrenabweichung oder sehr kurze Gültigkeit) darf
+     * nicht bis zu MINDESTGUELTIGKEIT_SEKUNDEN lang erneut angeboten werden,
+     * es muss beim nächsten Aufruf zeitnah neu getauscht werden.
+     */
+    public function test_bereits_abgelaufener_exp_anspruch_wird_zeitnah_neu_getauscht(): void
+    {
+        $abgelaufen = self::gueltigesCognitoToken(-3600);
+        Http::fake([self::BASE.self::PFAD => Http::sequence()
+            ->push($abgelaufen)
+            ->push(self::gueltigesCognitoToken())]);
+
+        $this->cache()->token(self::TOKEN);
+        sleep(2);
+        $this->cache()->token(self::TOKEN);
+
+        Http::assertSentCount(2);
+    }
+
     public function test_verbindungsfehler_wird_zur_transport_exception(): void
     {
         Http::fake(fn (): never => throw new ConnectionException('cURL error 28: timeout'));

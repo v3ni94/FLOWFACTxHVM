@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Http\Controllers\Admin;
 
 use App\Domain\Settings\SettingsRepository;
+use App\Flowfact\Client\CognitoTokenCache;
 use App\Flowfact\Client\Exceptions\FlowfactException;
 use App\Flowfact\Client\FlowfactClient;
 use App\Flowfact\Client\SettingsTokenProvider;
@@ -124,12 +125,19 @@ class FlowfactSettingsController extends Controller
      * Antworten werden gekürzt und bereinigt angezeigt, der Token erscheint
      * nie.
      */
-    public function diagnose(SettingsRepository $settings, FlowfactClient $client, TokenScrubber $scrubber): RedirectResponse
+    public function diagnose(SettingsRepository $settings, FlowfactClient $client, TokenScrubber $scrubber, CognitoTokenCache $cognitoTokenCache): RedirectResponse
     {
-        if (! $settings->hasSecret(SettingsTokenProvider::TOKEN_KEY)) {
+        $zugangsschluessel = $settings->getSecret(SettingsTokenProvider::TOKEN_KEY);
+
+        if (! is_string($zugangsschluessel) || $zugangsschluessel === '') {
             return redirect()->route('admin.flowfact.edit')
                 ->with('error', 'Es ist kein API-Token hinterlegt.');
         }
+
+        // Ein zwischengespeichertes Cognito-Token verwerfen: die Diagnose soll den Tausch
+        // gerade jetzt gegen admin-token-service prüfen, nicht ein älteres wiederverwenden
+        // (Prüfbericht 2026-09-21).
+        $cognitoTokenCache->vergessen($zugangsschluessel);
 
         $sonden = [];
 
@@ -217,7 +225,10 @@ class FlowfactSettingsController extends Controller
             );
             $erfolgreich = true;
         } catch (FlowfactException $exception) {
-            $ergebnis = 'Fehler: '.$exception->getMessage();
+            // Nicht auf die Bereinigung in FlowfactClient::mapException() verlassen: die
+            // deckt nur den Zugangsschlüssel ab, hier zusätzlich bereinigen, falls je ein
+            // Cognito-Token in eine Meldung geraten sollte (Prüfbericht 2026-09-21).
+            $ergebnis = 'Fehler: '.$scrubber->scrub($exception->getMessage());
             $erfolgreich = false;
         } catch (Throwable $exception) {
             $ergebnis = 'Fehler: '.$scrubber->scrub($exception->getMessage());

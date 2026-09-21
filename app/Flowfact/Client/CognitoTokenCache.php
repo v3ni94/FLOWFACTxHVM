@@ -55,6 +55,18 @@ final class CognitoTokenCache
     }
 
     /**
+     * Verwirft ein zwischengespeichertes Cognito-Token, damit der nächste
+     * Aufruf von token() einen frischen Tausch durchführt. Für die Diagnose
+     * im Adminbereich: eine "Cognito-Token"-Sonde soll den Tausch gerade
+     * jetzt gegen admin-token-service prüfen, nicht stillschweigend ein
+     * älteres, zufällig noch gültiges Token wiederverwenden.
+     */
+    public function vergessen(string $zugangsschluessel): void
+    {
+        Cache::forget(self::cacheKey($zugangsschluessel));
+    }
+
+    /**
      * @throws AuthenticationException wenn FLOWFACT den Zugangsschlüssel beim Tausch ablehnt
      * @throws TransportException bei Verbindungsfehlern oder Zeitüberschreitung
      */
@@ -150,6 +162,16 @@ final class CognitoTokenCache
 
         if ($ablauf === null) {
             return $this->ttlFallbackSeconds;
+        }
+
+        if ($ablauf <= time()) {
+            // FLOWFACT hat aus unserer Sicht ein bereits abgelaufenes Token
+            // ausgestellt (Uhrenabweichung oder sehr kurze Gültigkeit): nur
+            // eine Sekunde cachen, damit der nächste Aufruf sofort neu
+            // tauscht, statt ein zurückgewiesenes Token bis zu
+            // MINDESTGUELTIGKEIT_SEKUNDEN lang erneut anzubieten
+            // (Prüfbericht 2026-09-21).
+            return 1;
         }
 
         $sekunden = $ablauf - time() - self::SICHERHEITSABSTAND_SEKUNDEN;

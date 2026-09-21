@@ -231,6 +231,38 @@ final class FlowfactClientTest extends FlowfactTestCase
         self::assertStringContainsString('[Token entfernt]', $json);
     }
 
+    /**
+     * Prüfbericht 2026-09-21 (Sicherheitsprüfung des Cognito-Tauschs, Befund
+     * kritisch): TokenScrubber kannte bisher nur den Zugangsschlüssel, nicht
+     * das bereits ausgestellte Cognito-Token. Spiegelt FLOWFACT das
+     * cognitoToken in einer Fehlerantwort (422, 429, 404, 5xx), landete es
+     * ungeschwärzt in der Ausnahmemeldung, damit in
+     * ListingPortalPublication.letzter_fehler beziehungsweise
+     * ListingFlowfactLink.letzter_fehler und damit sichtbar für jeden aktiven
+     * Benutzer inklusive der Rolle Leser (ListingPolicy::view). Das Cognito-
+     * Token bleibt bis zu seinem eigenen Ablauf gültig und würde damit
+     * vollen externen FLOWFACT-Zugriff ermöglichen.
+     */
+    public function test_gespiegeltes_cognito_token_erscheint_nie_im_protokoll_oder_in_fehlermeldungen(): void
+    {
+        $this->hinterlegeToken();
+        Http::fake([self::BASE.'/*' => Http::response(['message' => 'Sitzung ungültig: '.$this->fakeCognitoToken], 422)]);
+
+        try {
+            $this->client()->post('entity-service', '/schemas/{schema}', ['schema' => 'x'], []);
+            self::fail('Es wurde keine Ausnahme ausgelöst.');
+        } catch (ValidationException $exception) {
+            self::assertStringNotContainsString($this->fakeCognitoToken, $exception->getMessage());
+            self::assertStringNotContainsString($this->fakeCognitoToken, json_encode($exception->body, JSON_THROW_ON_ERROR));
+        }
+
+        $log = TransferLog::query()->latest('id')->first();
+        $json = json_encode($log->getAttributes(), JSON_THROW_ON_ERROR);
+
+        self::assertStringNotContainsString($this->fakeCognitoToken, $json);
+        self::assertStringContainsString('[Token entfernt]', $json);
+    }
+
     public function test_nutzdaten_werden_auf_4096_byte_gekuerzt(): void
     {
         $this->hinterlegeToken();
@@ -283,5 +315,29 @@ final class FlowfactClientTest extends FlowfactTestCase
         $log = TransferLog::query()->first();
         self::assertStringNotContainsString('X-Amz-Signature', $log->details['url']);
         self::assertSame('[Binärdaten, 6 Byte]', $log->details['request']);
+    }
+
+    /**
+     * Prüfbericht 2026-09-21, Befund niedrig: uploadBinary() muss lastStatus()
+     * vor dem eigenen Aufruf zurücksetzen, sonst könnte nach einem
+     * fehlgeschlagenen Bildupload noch der Status eines vorherigen,
+     * unabhängigen Aufrufs gemeldet werden.
+     */
+    public function test_binaerupload_setzt_laststatus_vor_dem_eigenen_aufruf_zurueck(): void
+    {
+        $this->hinterlegeToken();
+        $client = $this->client();
+
+        Http::fake([self::BASE.'/*' => Http::response(['ok' => true], 500)]);
+        try {
+            $client->get('schema-service', '/v2/schemas');
+        } catch (FlowfactException) {
+        }
+        self::assertSame(500, $client->lastStatus());
+
+        Http::fake(['https://s3.eu-central-1.amazonaws.com/*' => Http::response('', 204)]);
+        $client->uploadBinary(self::presignedResponse()['presignedUrl'], 'BINAER', 'image/jpeg');
+
+        self::assertSame(204, $client->lastStatus());
     }
 }

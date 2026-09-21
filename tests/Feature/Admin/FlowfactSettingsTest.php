@@ -171,7 +171,10 @@ final class FlowfactSettingsTest extends TestCase
     {
         $admin = $this->admin();
         $this->settings()->setSecret('flowfact.api_token', self::TOKEN);
-        $cognitoToken = $this->vorgewaermtesCognitoToken(self::TOKEN);
+        // diagnose() verwirft ein zwischengespeichertes Token und tauscht live
+        // (Prüfbericht 2026-09-21): hier die echte Tauschantwort faken, statt
+        // den Zwischenspeicher vorzuwärmen.
+        $cognitoToken = $this->fakeCognitoAustausch();
         Http::fake([
             '*/user-service/users/currentUser' => Http::response(['message' => 'forbidden for '.self::TOKEN], 403),
             '*/schema-service/v2/schemas*' => Http::response([['name' => 'estates']]),
@@ -200,7 +203,32 @@ final class FlowfactSettingsTest extends TestCase
         $seite = $this->actingAs($admin)->get('/admin/flowfact');
         $seite->assertOk()->assertSee('Diagnose ausführen')->assertSee('Übertragungsform des Tokens');
 
-        Http::assertSentCount(10);
+        // 10 Sonden, plus ein zusätzlicher Aufruf für den erzwungenen frischen
+        // Tausch der ersten (Cognito-Token-) Sonde.
+        Http::assertSentCount(11);
+    }
+
+    /**
+     * Prüfbericht 2026-09-21, Befund mittel: die Diagnose soll den Tausch
+     * gegen admin-token-service tatsächlich gerade jetzt prüfen, nicht
+     * stillschweigend ein älteres, zufällig noch gültiges Cognito-Token aus
+     * dem Zwischenspeicher wiederverwenden.
+     */
+    public function test_diagnose_verwirft_ein_zwischengespeichertes_cognito_token_und_tauscht_live(): void
+    {
+        $admin = $this->admin();
+        $this->settings()->setSecret('flowfact.api_token', self::TOKEN);
+        // Unterschiedliche Gültigkeitsdauern, damit sich die Tokens auch dann
+        // unterscheiden, wenn beide Aufrufe innerhalb derselben Sekunde erfolgen.
+        $altesToken = $this->vorgewaermtesCognitoToken(self::TOKEN, self::gueltigesCognitoToken(1800));
+        $neuesToken = $this->fakeCognitoAustausch(self::gueltigesCognitoToken(3600));
+        self::assertNotSame($altesToken, $neuesToken);
+        Http::fake(['*' => Http::response(['id' => 'u1'])]);
+
+        $this->actingAs($admin)->post('/admin/flowfact/diagnose');
+
+        Http::assertSent(fn (Request $r): bool => $r->hasHeader('cognitoToken', $neuesToken));
+        Http::assertNotSent(fn (Request $r): bool => $r->hasHeader('cognitoToken', $altesToken));
     }
 
     public function test_uebertragungsform_des_tokens_ist_einstellbar_und_wirkt_auf_aufrufe(): void

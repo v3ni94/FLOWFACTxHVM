@@ -148,6 +148,8 @@ final class FlowfactClient
      */
     public function uploadBinary(string $presignedUrl, string $content, string $contentType): void
     {
+        $this->lastStatus = null;
+
         $urlOhneQuery = strtok($presignedUrl, '?') ?: $presignedUrl;
         $aktion = 's3 PUT presigned-url';
         $start = hrtime(true);
